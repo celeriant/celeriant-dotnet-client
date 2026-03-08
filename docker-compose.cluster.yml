@@ -1,0 +1,121 @@
+services:
+  # MinIO provides S3-compatible object storage for Celeriant's leader election
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # One-shot container that creates the bucket before nodes start
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/celeriant-cluster --ignore-existing;
+      mc anonymous set public local/celeriant-cluster;
+      "
+
+  # Node 1 — exposed on host port 10000
+  celeriant-node-1:
+    image: celeriant-server:latest
+    depends_on:
+      minio-setup:
+        condition: service_completed_successfully
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      - "10000:10000"
+    command:
+      - "celeriant"
+      - "--data-root"
+      - "/var/lib/celeriant"
+      - "--client-port"
+      - "10000"
+      - "--replication-port"
+      - "10001"
+      - "--listen-address"
+      - "0.0.0.0"
+      # NotLeaderException will contain this address so the pool can discover the leader
+      - "--advertised-client-address"
+      - "celeriant-node-1:10000"
+      - "--advertised-replication-address"
+      - "celeriant-node-1:10001"
+      - "--s3-enabled"
+      - "--s3-region"
+      - "us-east-1"
+      - "--s3-bucket"
+      - "celeriant-cluster"
+      - "--s3-access-key-id"
+      - "minioadmin"
+      - "--s3-secret-access-key"
+      - "minioadmin"
+      - "--s3-endpoint-override"
+      - "http://minio:9000"
+      - "--s3-allow-http"
+      - "--num-shards"
+      - "1"
+      - "--log-level"
+      - "warn"
+    volumes:
+      - node1-data:/var/lib/celeriant
+
+  # Node 2 — exposed on host port 10002 (container still listens on 10000)
+  celeriant-node-2:
+    image: celeriant-server:latest
+    depends_on:
+      minio-setup:
+        condition: service_completed_successfully
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      - "10002:10000"
+    command:
+      - "celeriant"
+      - "--data-root"
+      - "/var/lib/celeriant"
+      - "--client-port"
+      - "10000"
+      - "--replication-port"
+      - "10001"
+      - "--listen-address"
+      - "0.0.0.0"
+      - "--advertised-client-address"
+      - "celeriant-node-2:10000"
+      - "--advertised-replication-address"
+      - "celeriant-node-2:10001"
+      - "--s3-enabled"
+      - "--s3-region"
+      - "us-east-1"
+      - "--s3-bucket"
+      - "celeriant-cluster"
+      - "--s3-access-key-id"
+      - "minioadmin"
+      - "--s3-secret-access-key"
+      - "minioadmin"
+      - "--s3-endpoint-override"
+      - "http://minio:9000"
+      - "--s3-allow-http"
+      - "--s3-skip-signature"
+      - "--num-shards"
+      - "1"
+      - "--log-level"
+      - "warn"
+    volumes:
+      - node2-data:/var/lib/celeriant
+
+volumes:
+  node1-data:
+  node2-data:

@@ -52,3 +52,7 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Generated test certificates (keep generate.sh)
+test-certs/*.crt
+test-certs/*.key

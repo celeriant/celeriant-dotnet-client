@@ -1,0 +1,36 @@
+services:
+  # Single Celeriant node with TLS strict mode + mTLS (client cert required).
+  # Run `test-certs/generate.sh` before starting this compose.
+  # Port 10010 avoids conflict with the standalone server on 10000.
+  celeriant-tls:
+    image: celeriant-server:latest
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      - "10010:10010"
+    command:
+      - "celeriant"
+      - "--standalone"
+      - "--data-root"
+      - "/var/lib/celeriant"
+      - "--client-port"
+      - "10010"
+      - "--log-level"
+      - "warn"
+      - "--tls-mode"
+      - "strict"
+      - "--tls-ca-cert"
+      - "/certs/ca.crt"
+      - "--tls-node-cert"
+      - "/certs/server.crt"
+      - "--tls-node-key"
+      - "/certs/server.key"
+      # mTLS: clients must present a certificate signed by the CA above
+      - "--tls-client-auth"
+      - "require"
+    volumes:
+      - tls-data:/var/lib/celeriant
+      - ./test-certs:/certs:ro
+
+volumes:
+  tls-data:

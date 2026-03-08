@@ -1,0 +1,12 @@
+services:
+  celeriant-server:
+    image: celeriant-server:latest
+    ports:
+      - "10000:10000"
+    security_opt:
+      - seccomp=unconfined
+    volumes:
+      - celeriant-data:/var/lib/celeriant
+
+volumes:
+  celeriant-data:

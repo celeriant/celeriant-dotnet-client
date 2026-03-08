@@ -26,6 +26,8 @@ bld/
 # .NET Core
 project.lock.json
 project.fragment.lock.json
+
+# Build artifacts
 artifacts/
 
 # ASP.NET Scaffolding

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -9,7 +9,36 @@
     <RootNamespace>Celeriant.Client</RootNamespace>
     <AssemblyName>Celeriant.Client</AssemblyName>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
+
+  <!-- NuGet package metadata -->
+  <PropertyGroup>
+    <PackageId>Celeriant.Client</PackageId>
+    <Version>0.1.0-beta.1</Version>
+    <Authors>Celeriant</Authors>
+    <Description>Official .NET client for Celeriant — the distributed event store built for event sourcing at scale.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/celeriant/celeriant-dotnet-client</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/celeriant/celeriant-dotnet-client</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>event-sourcing;cqrs;event-store;celeriant;distributed-systems</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <Copyright>Copyright (c) Celeriant contributors</Copyright>
+  </PropertyGroup>
+
+  <!-- SourceLink for debugger source stepping -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="" />
+    <None Include="..\icon.png" Pack="true" PackagePath="" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Celeriant.Client.Tests" />
@@ -23,6 +52,7 @@
     <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
     <PackageReference Include="Snappier" Version="1.1.6" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
 
 </Project>

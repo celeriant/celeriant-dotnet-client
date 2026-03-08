@@ -76,7 +76,7 @@ public sealed class ClientTlsConfig
     /// <para>
     /// Pass the public certificate (without a private key) and an <see cref="AsymmetricAlgorithm"/>
     /// implementation that delegates signing to the remote key store. The .NET runtime calls
-    /// <see cref="RSA.SignHash"/> or <see cref="ECDsa.SignHash"/> during the TLS handshake —
+    /// <see cref="RSA.SignHash(byte[], HashAlgorithmName, RSASignaturePadding)"/> or <see cref="ECDsa.SignHash(byte[])"/> during the TLS handshake —
     /// your implementation performs that operation via the KMS/HSM API.
     /// </para>
     ///

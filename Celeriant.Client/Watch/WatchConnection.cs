@@ -250,7 +250,7 @@ public sealed class WatchConnection : IAsyncDisposable
             throw new CeleriantErrorException(genericErr.Value);
         }
 
-        if (response is ClientResponse.Watch watchResponse)
+        if (response is ClientResponse.Watch watchResponse && watchResponse.Value.Events.Length > 0)
         {
             // Buffer the first response so NextAsync can return it.
             _bufferedResponse = watchResponse.Value;
@@ -265,18 +265,28 @@ public sealed class WatchConnection : IAsyncDisposable
     {
         // Each NextAsync re-sends the same watch request. The server acts as a long-poll:
         // it responds once events are available (or times out and returns an empty batch).
-        ClientResponse response = await _singleClient!.SendRequestAsync(
-            new ClientRequest.Watch(_singleRequest!), _options.Compression, ct)
-            .ConfigureAwait(false);
+        // Heartbeats (empty events) are internal and are silently consumed here.
+        while (true)
+        {
+            ClientResponse response = await _singleClient!.SendRequestAsync(
+                new ClientRequest.Watch(_singleRequest!), _options.Compression, ct)
+                .ConfigureAwait(false);
 
-        if (response is ClientResponse.Watch watchResponse)
-            return watchResponse.Value;
+            if (response is ClientResponse.Watch watchResponse)
+            {
+                if (watchResponse.Value.Events.Length > 0)
+                    return watchResponse.Value;
 
-        if (response is ClientResponse.GenericError err)
-            throw new CeleriantErrorException(err.Value);
+                // Heartbeat — re-poll.
+                continue;
+            }
 
-        throw new Errors.ProtocolException(
-            $"Unexpected response type {response.GetType().Name} during watch.");
+            if (response is ClientResponse.GenericError err)
+                throw new CeleriantErrorException(err.Value);
+
+            throw new Errors.ProtocolException(
+                $"Unexpected response type {response.GetType().Name} during watch.");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -364,7 +374,9 @@ public sealed class WatchConnection : IAsyncDisposable
 
                 if (response is ClientResponse.Watch watchResponse)
                 {
-                    await writer.WriteAsync(watchResponse.Value, ct).ConfigureAwait(false);
+                    // Skip heartbeats (empty events) — they are internal keep-alive signals.
+                    if (watchResponse.Value.Events.Length > 0)
+                        await writer.WriteAsync(watchResponse.Value, ct).ConfigureAwait(false);
                 }
                 else if (response is ClientResponse.GenericError err)
                 {

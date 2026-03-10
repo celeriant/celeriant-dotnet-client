@@ -182,6 +182,7 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
             ct).ConfigureAwait(false);
 
         client.WithMaxRequestSize(_options.MaxRequestSize)
+              .WithMaxResponseSize(_options.MaxResponseSize)
               .WithTimeout(_options.RequestTimeout);
 
         if (_options.IdentityConfig is { } identityConfig)

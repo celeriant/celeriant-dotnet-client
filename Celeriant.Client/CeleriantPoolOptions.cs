@@ -33,8 +33,11 @@ public sealed class CeleriantPoolOptions
     /// <summary>Per-request timeout applied to each <c>SendRequestAsync</c> call. Default: 30 seconds.</summary>
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Maximum allowed request/response payload size in bytes. Default: 10 MB.</summary>
+    /// <summary>Maximum allowed request payload size in bytes. Default: 10 MB.</summary>
     public long MaxRequestSize { get; init; } = 10_000_000;
+
+    /// <summary>Maximum allowed response payload size in bytes. Default: 64 MB.</summary>
+    public long MaxResponseSize { get; init; } = 64 * 1024 * 1024;
 
     /// <summary>
     /// How long an idle connection may remain in the pool before being disposed.

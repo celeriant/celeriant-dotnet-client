@@ -70,8 +70,11 @@ public sealed class CeleriantPoolOptionsBuilder
     /// <summary>Per-request timeout. Default: 30 seconds.</summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Maximum request/response payload size in bytes. Default: 10 MB.</summary>
+    /// <summary>Maximum request payload size in bytes. Default: 10 MB.</summary>
     public long MaxRequestSize { get; set; } = 10_000_000;
+
+    /// <summary>Maximum response payload size in bytes. Default: 64 MB.</summary>
+    public long MaxResponseSize { get; set; } = 64 * 1024 * 1024;
 
     /// <summary>Idle connection timeout. Default: 5 minutes.</summary>
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
@@ -103,6 +106,7 @@ public sealed class CeleriantPoolOptionsBuilder
             ConnectionTimeout = ConnectionTimeout,
             RequestTimeout = RequestTimeout,
             MaxRequestSize = MaxRequestSize,
+            MaxResponseSize = MaxResponseSize,
             IdleTimeout = IdleTimeout,
             CompressionAlgorithm = CompressionAlgorithm,
             AutoCompressionThresholdBytes = AutoCompressionThresholdBytes,

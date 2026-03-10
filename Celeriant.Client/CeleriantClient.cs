@@ -25,6 +25,7 @@ public sealed class CeleriantClient : IAsyncDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private long _maxRequestSize = 10_000_000;
+    private long _maxResponseSize = 64 * 1024 * 1024; // 64 MB — matches server default
     private TimeSpan? _timeout;
 
     // -------------------------------------------------------------------------
@@ -152,6 +153,16 @@ public sealed class CeleriantClient : IAsyncDisposable
     public CeleriantClient WithMaxRequestSize(long maxRequestSize)
     {
         _maxRequestSize = maxRequestSize;
+        return this;
+    }
+
+    /// <summary>
+    /// Set the maximum allowed response payload size in bytes.
+    /// Responses larger than this will throw. Default is 64 MB.
+    /// </summary>
+    public CeleriantClient WithMaxResponseSize(long maxResponseSize)
+    {
+        _maxResponseSize = maxResponseSize;
         return this;
     }
 
@@ -485,9 +496,9 @@ public sealed class CeleriantClient : IAsyncDisposable
             WireHeader responseHeader = WireHeader.ParseFrom(headerBuf);
             ArrayPool<byte>.Shared.Return(headerBuf);
 
-            if (responseHeader.CompressedLength > _maxRequestSize)
+            if (responseHeader.CompressedLength > _maxResponseSize)
                 throw new InvalidDataException(
-                    $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxRequestSize}.");
+                    $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}.");
 
             // 10. Read response payload into pooled buffer
             int respLen = (int)responseHeader.CompressedLength;

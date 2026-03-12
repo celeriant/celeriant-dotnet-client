@@ -105,8 +105,8 @@ public class ErrorResponseTests
         Assert.Equal(3005u, ErrorResponse.TrimNotLeader);
         Assert.Equal(4006u, ErrorResponse.DeleteNotLeader);
         Assert.Equal(10004u, ErrorResponse.IdentifyRequired);
-        Assert.Equal(1001u, ErrorResponse.AuthRequired);
-        Assert.Equal(1002u, ErrorResponse.AuthInvalidKey);
-        Assert.Equal(1003u, ErrorResponse.AuthInsufficientPermissions);
+        Assert.Equal(10005u, ErrorResponse.AuthRequired);
+        Assert.Equal(10006u, ErrorResponse.AuthInvalidKey);
+        Assert.Equal(10007u, ErrorResponse.AuthInsufficientPermissions);
     }
 }

@@ -99,18 +99,20 @@ public sealed class ClusterTests
     }
 
     [SkippableFact]
-    public async Task WriteToFollower_WithoutSeedAddresses_Throws()
+    public async Task WriteToFollower_WithoutSeedAddresses_DiscoversLeader()
     {
-        // Pool only knows about the follower — nowhere to fail over to after NotLeaderException.
-        // The LeaderAddress from the exception is a Docker container name (unreachable from host),
-        // and there are no additional seed addresses, so the pool must give up.
+        // Pool only knows about the follower, but the NotLeaderException contains the
+        // leader's advertised address (localhost:XXXX) which is reachable from the host.
+        // The pool should discover the leader and succeed.
         await using var pool = CreatePool(address: FollowerAddress);
 
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await pool.WriteAsync(
-                TestHelpers.SingleEventWrite(TestHelpers.NewKey(), "no-seed-write"u8.ToArray()));
-        });
+        var key = TestHelpers.NewKey();
+        await pool.WriteAsync(
+            TestHelpers.SingleEventWrite(key, "discovered-leader-write"u8.ToArray()));
+
+        var read = await pool.ReadAsync(TestHelpers.ReadAllRequest(key));
+        var events = read.EventBatches.SelectMany(b => b.Events).ToArray();
+        Assert.Single(events);
     }
 
     // -------------------------------------------------------------------------

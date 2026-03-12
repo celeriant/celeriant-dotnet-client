@@ -1,0 +1,123 @@
+using Celeriant.Client.Requests;
+using Celeriant.Client.Responses;
+using Celeriant.Client.Streaming;
+using Celeriant.Client.Watch;
+
+namespace Celeriant.Client;
+
+/// <summary>
+/// Abstraction over <see cref="CeleriantPool"/> for dependency injection and testing.
+/// </summary>
+public interface ICeleriantPool : IAsyncDisposable
+{
+    /// <summary>Send a read request. Distributed across all known nodes via round-robin.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">All known nodes are unreachable.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<ReadResponse> ReadAsync(ReadRequest request, CancellationToken ct = default);
+
+    /// <summary>Send an aggregate details request. Distributed across all known nodes via round-robin.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">All known nodes are unreachable.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<AggregateDetailsResponse> AggregateDetailsAsync(AggregateDetailsRequest request, CancellationToken ct = default);
+
+    /// <summary>Send a register-schema request. Routed to the leader with automatic failover.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<SuccessResponse> RegisterSchemaAsync(RegisterSchemaRequest request, CancellationToken ct = default);
+
+    /// <summary>Send a write request. Routed to the leader with automatic failover.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<SuccessResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
+
+    /// <summary>Write events to a single aggregate. Routed to the leader with automatic failover.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<SuccessResponse> WriteAsync(
+        AggregateKey key,
+        AggregateEvent[] events,
+        Guid? clientId = null,
+        bool allowCreate = true,
+        long? expectedEventBatchIndex = null,
+        bool enforceClientIdempotency = false,
+        CancellationToken ct = default);
+
+    /// <summary>Send a delete request. Routed to the leader with automatic failover.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<SuccessResponse> DeleteAsync(DeleteRequest request, CancellationToken ct = default);
+
+    /// <summary>Send a trim-start request. Routed to the leader with automatic failover.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="Errors.ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<SuccessResponse> TrimStartAsync(TrimStartRequest request, CancellationToken ct = default);
+
+    /// <summary>Stream all event batches for an aggregate, automatically following pagination cursors.</summary>
+    /// <exception cref="Errors.CeleriantErrorException">The server returned an application-level error.</exception>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    IAsyncEnumerable<AggregateEventBatch> ReadAllAsync(
+        AggregateKey key,
+        ReadFilters? filters = null,
+        CancellationToken ct = default);
+
+    /// <summary>Stream all organisations.</summary>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    IAsyncEnumerable<OrgListItem> ListOrgsAsync(ListOptions? options = null, CancellationToken ct = default);
+
+    /// <summary>Stream all aggregate types.</summary>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    IAsyncEnumerable<AggregateTypeListItem> ListAggregateTypesAsync(
+        Guid? orgId = null,
+        ListOptions? options = null,
+        CancellationToken ct = default);
+
+    /// <summary>Stream aggregates with merged statistics.</summary>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    IAsyncEnumerable<AggregateStats> ListAggregatesAsync(
+        Guid? orgId = null,
+        Guid? aggregateTypeId = null,
+        ListOptions? options = null,
+        CancellationToken ct = default);
+
+    /// <summary>Open a dedicated watch connection (not pooled).</summary>
+    /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
+    /// <exception cref="Errors.CeleriantTimeoutException">The connection or handshake timed out.</exception>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<WatchConnection> WatchAsync(
+        WatchRequest request,
+        WatchOptions? options = null,
+        CancellationToken ct = default);
+
+    /// <summary>Borrow a connection from the pool for manual low-level use.</summary>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    Task<PooledConnection> GetConnectionAsync(CancellationToken ct = default);
+}

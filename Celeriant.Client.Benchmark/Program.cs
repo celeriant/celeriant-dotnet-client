@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Celeriant.Client;
+using Celeriant.Client.Errors;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 
@@ -339,12 +340,15 @@ async Task<BenchmarkResult> RunBenchmarkIteration(string addr, int numConnection
 
                     try
                     {
-                        var response = await client.SendRequestAsync(request).ConfigureAwait(false);
+                        await client.SendRequestAsync(request).ConfigureAwait(false);
                         latencies.Add(sw.ElapsedMilliseconds);
                         requestCount++;
-
-                        if (response is ClientResponse.GenericError err)
-                            Console.Error.WriteLine($"  Conn {connectionId} error: {err.Value.ErrorCode}");
+                    }
+                    catch (CeleriantErrorException ex)
+                    {
+                        Console.Error.WriteLine($"  Conn {connectionId} error: {ex.Error.ErrorCode}");
+                        latencies.Add(sw.ElapsedMilliseconds);
+                        requestCount++;
                     }
                     catch (Exception ex)
                     {
@@ -390,12 +394,15 @@ async Task<BenchmarkResult> RunBenchmarkIteration(string addr, int numConnection
 
                     try
                     {
-                        var response = client.SendRequest(request);
+                        client.SendRequest(request);
                         latencies.Add(sw.ElapsedMilliseconds);
                         requestCount++;
-
-                        if (response is ClientResponse.GenericError err)
-                            Console.Error.WriteLine($"  Conn {connectionId} error: {err.Value.ErrorCode}");
+                    }
+                    catch (CeleriantErrorException ex)
+                    {
+                        Console.Error.WriteLine($"  Conn {connectionId} error: {ex.Error.ErrorCode}");
+                        latencies.Add(sw.ElapsedMilliseconds);
+                        requestCount++;
                     }
                     catch (Exception ex)
                     {

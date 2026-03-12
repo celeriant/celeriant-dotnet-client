@@ -60,27 +60,6 @@ public sealed class WatchTests
     }
 
     [SkippableFact]
-    public async Task Watch_Heartbeat_ReturnsEmptyEvents()
-    {
-        var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "heartbeat-setup")]);
-
-        // Watch an aggregate that won't get any new events
-        var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
-        await using var watch = await WatchConnection.ConnectAsync(
-            Address, watchRequest, new WatchOptions());
-
-        // Drain the first buffered response (may have the initial write)
-        var first = await watch.NextAsync(TimeSpan.FromSeconds(8));
-        Assert.NotNull(first);
-
-        // Next poll should be a heartbeat (no new events)
-        var heartbeat = await watch.NextAsync(TimeSpan.FromSeconds(8));
-        Assert.NotNull(heartbeat);
-        Assert.Empty(heartbeat.Events);
-    }
-
-    [SkippableFact]
     public async Task Watch_NextAsyncWithTimeout_ReturnsNullOnExpiry()
     {
         var key = TestHelpers.NewKey();

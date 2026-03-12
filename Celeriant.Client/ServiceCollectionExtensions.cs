@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
             configure(builder);
             return new CeleriantPool(builder.Build());
         });
+        services.AddSingleton<ICeleriantPool>(sp => sp.GetRequiredService<CeleriantPool>());
 
         return services;
     }
@@ -76,8 +77,8 @@ public sealed class CeleriantPoolOptionsBuilder
     /// <summary>Maximum response payload size in bytes. Default: 64 MB.</summary>
     public long MaxResponseSize { get; set; } = 64 * 1024 * 1024;
 
-    /// <summary>Idle connection timeout. Default: 5 minutes.</summary>
-    public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    /// <summary>Idle connection timeout. Must be shorter than the server's slow_client_timeout. Default: 25 seconds.</summary>
+    public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromSeconds(25);
 
     /// <summary>When true, route reads only to followers. Default: false.</summary>
     public bool RouteReadsToFollowers { get; set; }

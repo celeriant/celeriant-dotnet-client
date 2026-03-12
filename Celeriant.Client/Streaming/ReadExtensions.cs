@@ -37,7 +37,7 @@ public static class ReadExtensions
         ReadFilters filters,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        long? nextIndex = filters.FromEventBatchIndex;
+        long? nextIndex = Math.Max(1, filters.FromEventBatchIndex);
 
         while (nextIndex is not null)
         {
@@ -45,24 +45,7 @@ public static class ReadExtensions
 
             var currentFilters = nextIndex == filters.FromEventBatchIndex
                 ? filters
-                : new ReadFilters
-                {
-                    FromEventBatchIndex = nextIndex.Value,
-                    ToEventBatchIndex = filters.ToEventBatchIndex,
-                    IncludeEventTypes = filters.IncludeEventTypes,
-                    ExcludeClientId = filters.ExcludeClientId,
-                    IncludeClientId = filters.IncludeClientId,
-                    ExcludeUserId = filters.ExcludeUserId,
-                    IncludeUserId = filters.IncludeUserId,
-                    MinServerTimestamp = filters.MinServerTimestamp,
-                    MaxServerTimestamp = filters.MaxServerTimestamp,
-                    MinClientEventIndex = filters.MinClientEventIndex,
-                    MaxClientEventIndex = filters.MaxClientEventIndex,
-                    MinEventTimestamp = filters.MinEventTimestamp,
-                    MaxEventTimestamp = filters.MaxEventTimestamp,
-                    MinEventIndex = filters.MinEventIndex,
-                    MaxEventIndex = filters.MaxEventIndex,
-                };
+                : filters with { FromEventBatchIndex = nextIndex.Value };
 
             var response = await client.ReadAsync(new ReadRequest
             {

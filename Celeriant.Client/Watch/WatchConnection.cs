@@ -37,7 +37,7 @@ namespace Celeriant.Client.Watch;
 /// </summary>
 public sealed class WatchConnection : IAsyncDisposable
 {
-    private const uint ShardRoutingError = 9001;
+    private const uint ShardRoutingError = ErrorResponse.ShardRoutingMultipleShards;
 
     // Single-shard state.
     private CeleriantClient? _singleClient;
@@ -102,8 +102,14 @@ public sealed class WatchConnection : IAsyncDisposable
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Wait for the next batch of watch events. Blocks until a response arrives or
+    /// Wait for the next batch of watch events. Blocks indefinitely until a response arrives or
     /// the cancellation token is triggered.
+    ///
+    /// <para>
+    /// If the server stops sending events this method will block forever.
+    /// Prefer the <see cref="NextAsync(TimeSpan, CancellationToken)"/> overload or pass a
+    /// <see cref="CancellationToken"/> with a timeout to avoid hanging.
+    /// </para>
     /// </summary>
     public async Task<WatchResponse> NextAsync(CancellationToken ct = default)
     {
@@ -221,33 +227,26 @@ public sealed class WatchConnection : IAsyncDisposable
                 new ClientRequest.Watch(probeRequest), _options.Compression, ct)
                 .ConfigureAwait(false);
         }
-        catch
-        {
-            await client.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-
-        if (response is ClientResponse.GenericError err && err.Value.ErrorCode == ShardRoutingError)
+        catch (CeleriantErrorException ex) when (ex.Error.ErrorCode == ShardRoutingError)
         {
             // Server told us how many shards there are — fall back to multi-shard.
             await client.DisposeAsync().ConfigureAwait(false);
 
-            long numShards = ParseNumShards(err.Value.ErrorMessage);
+            long numShards = ParseNumShards(ex.Error.ErrorMessage);
             if (numShards == 0)
             {
                 // Cannot determine shard count — rethrow as server error.
-                throw new CeleriantErrorException(err.Value);
+                throw;
             }
 
             await ConnectMultiShardAsync(address, originalRequest, _options.StartShard, numShards, ct)
                 .ConfigureAwait(false);
             return;
         }
-
-        if (response is ClientResponse.GenericError genericErr)
+        catch
         {
             await client.DisposeAsync().ConfigureAwait(false);
-            throw new CeleriantErrorException(genericErr.Value);
+            throw;
         }
 
         if (response is ClientResponse.Watch watchResponse && watchResponse.Value.Events.Length > 0)
@@ -280,9 +279,6 @@ public sealed class WatchConnection : IAsyncDisposable
                 // Heartbeat — re-poll.
                 continue;
             }
-
-            if (response is ClientResponse.GenericError err)
-                throw new CeleriantErrorException(err.Value);
 
             throw new Errors.ProtocolException(
                 $"Unexpected response type {response.GetType().Name} during watch.");
@@ -378,11 +374,6 @@ public sealed class WatchConnection : IAsyncDisposable
                     if (watchResponse.Value.Events.Length > 0)
                         await writer.WriteAsync(watchResponse.Value, ct).ConfigureAwait(false);
                 }
-                else if (response is ClientResponse.GenericError err)
-                {
-                    writer.TryComplete(new CeleriantErrorException(err.Value));
-                    return;
-                }
                 else
                 {
                     writer.TryComplete(new Errors.ProtocolException(
@@ -421,11 +412,26 @@ public sealed class WatchConnection : IAsyncDisposable
 
     private async Task<CeleriantClient> CreateClientAsync(string address, CancellationToken ct)
     {
-        return await CeleriantClient.ConnectAsync(
+        var client = await CeleriantClient.ConnectAsync(
             address,
             connectionTimeout: null,
             _options.TlsConfig,
             ct).ConfigureAwait(false);
+
+        if (_options.IdentityConfig is { } identityConfig)
+        {
+            try
+            {
+                await client.IdentifyAsync(identityConfig, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        return client;
     }
 
     /// <summary>

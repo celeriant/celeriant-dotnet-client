@@ -81,9 +81,9 @@ public sealed class TypedMethodTests
     }
 
     [SkippableFact]
-    public async Task ReadAsync_NonexistentAggregate_ThrowsCeleriantErrorException()
+    public async Task ReadAsync_NonexistentAggregate_ThrowsReadErrorException()
     {
-        await Assert.ThrowsAsync<CeleriantErrorException>(
+        await Assert.ThrowsAsync<ReadErrorException>(
             () => Client.ReadAsync(new ReadRequest
             {
                 AggregateKey = TestHelpers.NewKey(),
@@ -109,9 +109,9 @@ public sealed class TypedMethodTests
     }
 
     [SkippableFact]
-    public async Task AggregateDetailsAsync_NonexistentAggregate_ThrowsCeleriantErrorException()
+    public async Task AggregateDetailsAsync_NonexistentAggregate_ThrowsReadErrorException()
     {
-        await Assert.ThrowsAsync<CeleriantErrorException>(
+        await Assert.ThrowsAsync<ReadErrorException>(
             () => Client.AggregateDetailsAsync(
                 new AggregateDetailsRequest { AggregateKey = TestHelpers.NewKey() }));
     }

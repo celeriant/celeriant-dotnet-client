@@ -36,10 +36,13 @@ services:
         condition: service_completed_successfully
     security_opt:
       - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     ports:
       - "10000:10000"
     command:
-      - "celeriant"
       - "--data-root"
       - "/var/lib/celeriant"
       - "--client-port"
@@ -50,7 +53,7 @@ services:
       - "0.0.0.0"
       # NotLeaderException will contain this address so the pool can discover the leader
       - "--advertised-client-address"
-      - "celeriant-node-1:10000"
+      - "localhost:10000"
       - "--advertised-replication-address"
       - "celeriant-node-1:10001"
       - "--s3-enabled"
@@ -80,10 +83,13 @@ services:
         condition: service_completed_successfully
     security_opt:
       - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     ports:
       - "10002:10000"
     command:
-      - "celeriant"
       - "--data-root"
       - "/var/lib/celeriant"
       - "--client-port"
@@ -93,7 +99,7 @@ services:
       - "--listen-address"
       - "0.0.0.0"
       - "--advertised-client-address"
-      - "celeriant-node-2:10000"
+      - "localhost:10002"
       - "--advertised-replication-address"
       - "celeriant-node-2:10001"
       - "--s3-enabled"

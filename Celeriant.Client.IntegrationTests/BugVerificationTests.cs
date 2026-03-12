@@ -1,4 +1,5 @@
 using System.Text;
+using Celeriant.Client.Errors;
 using Celeriant.Client.Protocol;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
@@ -129,11 +130,18 @@ public sealed class BugVerificationTests
 
             // Send one request to verify the connection works
             var key = TestHelpers.NewKey();
-            var resp = await client.SendRequestAsync(
-                new ClientRequest.AggregateDetails(
-                    TestHelpers.DetailsRequest(key)));
-            // Non-existent aggregate returns error — that's fine
-            Assert.True(resp is ClientResponse.GenericError or ClientResponse.AggregateDetails);
+            // Non-existent aggregate throws — that's fine
+            try
+            {
+                var resp = await client.SendRequestAsync(
+                    new ClientRequest.AggregateDetails(
+                        TestHelpers.DetailsRequest(key)));
+                Assert.IsType<ClientResponse.AggregateDetails>(resp);
+            }
+            catch (CeleriantErrorException)
+            {
+                // Expected for non-existent aggregates
+            }
         }
 
         // Force GC to flush any leaked CTS finalizers

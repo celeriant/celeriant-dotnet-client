@@ -41,9 +41,16 @@ public sealed class CeleriantPoolOptions
 
     /// <summary>
     /// How long an idle connection may remain in the pool before being disposed.
-    /// Currently tracked via pool-level eviction on checkout (not a background timer). Default: 5 minutes.
+    /// Eviction is lazy (checked on checkout, not via a background timer).
+    ///
+    /// <para>
+    /// This must be shorter than the server's <c>slow_client_timeout</c> (default 30 s),
+    /// otherwise the server will close idle connections before the client evicts them,
+    /// causing a wasted round-trip and <see cref="Errors.ConnectionFailedException"/> on
+    /// the next checkout. Default: 25 seconds.
+    /// </para>
     /// </summary>
-    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromSeconds(25);
 
     /// <summary>
     /// When true, read operations (read, aggregate details, list, watch) are routed only to

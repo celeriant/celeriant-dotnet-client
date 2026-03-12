@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Celeriant.Client.Errors;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 
@@ -23,8 +24,8 @@ namespace Celeriant.Client.Streaming;
 public static class ListExtensions
 {
     // Shard routing error codes returned by the server when a shard index is out of range.
-    private const uint ShardRoutingError1 = 9001;
-    private const uint ShardRoutingError2 = 9002;
+    private const uint ShardRoutingError1 = ErrorResponse.ShardRoutingMultipleShards;
+    private const uint ShardRoutingError2 = ErrorResponse.ShardRoutingIncompatibleFilters;
 
     // -------------------------------------------------------------------------
     // ListOrgsAsync
@@ -84,21 +85,20 @@ public static class ListExtensions
                 Cursor = cursor,
             });
 
-            ClientResponse response = await client.SendRequestAsync(request, options.Compression, ct)
-                .ConfigureAwait(false);
-
-            if (response is ClientResponse.GenericError err)
+            ClientResponse response;
+            try
             {
-                if (err.Value.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
-                {
-                    hasMoreShards = false;
-                    continue;
-                }
-                throw new Errors.CeleriantErrorException(err.Value);
+                response = await client.SendRequestAsync(request, options.Compression, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            {
+                hasMoreShards = false;
+                continue;
             }
 
             if (response is not ClientResponse.ListOrgs listResponse)
-                throw new Errors.ProtocolException($"Unexpected response type {response.GetType().Name} for ListOrgs.");
+                throw new ProtocolException($"Unexpected response type {response.GetType().Name} for ListOrgs.");
 
             foreach (OrgListItem item in listResponse.Value.Orgs)
             {
@@ -170,21 +170,20 @@ public static class ListExtensions
                 Cursor = cursor,
             });
 
-            ClientResponse response = await client.SendRequestAsync(request, options.Compression, ct)
-                .ConfigureAwait(false);
-
-            if (response is ClientResponse.GenericError err)
+            ClientResponse response;
+            try
             {
-                if (err.Value.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
-                {
-                    hasMoreShards = false;
-                    continue;
-                }
-                throw new Errors.CeleriantErrorException(err.Value);
+                response = await client.SendRequestAsync(request, options.Compression, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            {
+                hasMoreShards = false;
+                continue;
             }
 
             if (response is not ClientResponse.ListAggregateTypes listResponse)
-                throw new Errors.ProtocolException($"Unexpected response type {response.GetType().Name} for ListAggregateTypes.");
+                throw new ProtocolException($"Unexpected response type {response.GetType().Name} for ListAggregateTypes.");
 
             foreach (AggregateTypeListItem item in listResponse.Value.AggregateTypes)
             {
@@ -264,21 +263,20 @@ public static class ListExtensions
                 Cursor = cursor,
             });
 
-            ClientResponse response = await client.SendRequestAsync(request, options.Compression, ct)
-                .ConfigureAwait(false);
-
-            if (response is ClientResponse.GenericError err)
+            ClientResponse response;
+            try
             {
-                if (err.Value.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
-                {
-                    hasMoreShards = false;
-                    continue;
-                }
-                throw new Errors.CeleriantErrorException(err.Value);
+                response = await client.SendRequestAsync(request, options.Compression, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            {
+                hasMoreShards = false;
+                continue;
             }
 
             if (response is not ClientResponse.ListAggregates listResponse)
-                throw new Errors.ProtocolException($"Unexpected response type {response.GetType().Name} for ListAggregates.");
+                throw new ProtocolException($"Unexpected response type {response.GetType().Name} for ListAggregates.");
 
             foreach (AggregateListItem item in listResponse.Value.Aggregates)
             {

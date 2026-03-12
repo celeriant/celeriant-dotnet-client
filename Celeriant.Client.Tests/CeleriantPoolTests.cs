@@ -341,8 +341,7 @@ public class CeleriantPoolTests
     public async Task WriteAsync_GenericError_ThrowsCeleriantErrorException()
     {
         var errorResponse = new ErrorResponse { ErrorCode = 7001, ErrorMessage = "aggregate not found" };
-        var response = new ClientResponse.GenericError(errorResponse);
-        var leaderMock = MockPoolThatSucceeds("leader:10000", response);
+        var leaderMock = MockPoolThatThrows("leader:10000", new CeleriantErrorException(errorResponse));
 
         var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
         {

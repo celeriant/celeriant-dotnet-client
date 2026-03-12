@@ -15,10 +15,10 @@ namespace Celeriant.Client;
 /// <para>
 /// Maintains per-node connection pools and routes operations based on their requirements:
 /// <list type="bullet">
-///   <item><b>Leader operations</b> (write, delete, trim) are sent to the current leader
+///   <item><b>Leader operations</b> (write, delete, trim, register schema) are sent to the current leader
 ///   with automatic failover — if the server responds with <see cref="NotLeaderException"/>,
 ///   the pool updates its leader address and retries transparently.</item>
-///   <item><b>Read operations</b> (read, aggregate details, register schema, list, watch)
+///   <item><b>Read operations</b> (read, aggregate details, list, watch)
 ///   are distributed across all known nodes via round-robin, offloading the leader.</item>
 /// </list>
 /// </para>
@@ -33,7 +33,7 @@ namespace Celeriant.Client;
 /// Thread-safety: this class is safe for concurrent use from multiple threads/async contexts.
 /// </para>
 /// </summary>
-public sealed class CeleriantPool : IAsyncDisposable
+public sealed class CeleriantPool : ICeleriantPool
 {
     private readonly CeleriantPoolOptions _options;
     private readonly ConcurrentDictionary<string, INodeConnectionPool> _nodePools = new();
@@ -96,7 +96,6 @@ public sealed class CeleriantPool : IAsyncDisposable
             static r => r switch
             {
                 ClientResponse.Read read => read.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for Read."),
             },
             ct);
@@ -116,34 +115,32 @@ public sealed class CeleriantPool : IAsyncDisposable
             static r => r switch
             {
                 ClientResponse.AggregateDetails details => details.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for AggregateDetails."),
             },
             ct);
 
+    // -------------------------------------------------------------------------
+    // Typed methods — leader operations (write/delete/trim/schema with failover)
+    // -------------------------------------------------------------------------
+
     /// <summary>Send a register-schema request and return the typed response.
-    /// Distributed across all known nodes via round-robin.</summary>
+    /// Routed to the leader with automatic failover on leader change.</summary>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
-    /// <exception cref="ConnectionFailedException">All known nodes are unreachable.</exception>
+    /// <exception cref="ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
     /// <exception cref="ProtocolException">The server returned an unexpected response type.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
     public Task<SuccessResponse> RegisterSchemaAsync(
         RegisterSchemaRequest request,
         CancellationToken ct = default)
-        => ExecuteOnAnyNodeAsync(
+        => ExecuteLeaderOperationAsync(
             new ClientRequest.RegisterSchema(request),
             static r => r switch
             {
                 ClientResponse.RegisterSchema schema => schema.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for RegisterSchema."),
             },
             ct);
-
-    // -------------------------------------------------------------------------
-    // Typed methods — leader operations (write/delete/trim with failover)
-    // -------------------------------------------------------------------------
 
     /// <summary>Send a write request and return the typed response.
     /// Routed to the leader with automatic failover on leader change.</summary>
@@ -160,7 +157,6 @@ public sealed class CeleriantPool : IAsyncDisposable
             static r => r switch
             {
                 ClientResponse.Write w => w.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for Write."),
             },
             ct);
@@ -176,12 +172,18 @@ public sealed class CeleriantPool : IAsyncDisposable
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID for idempotency. Defaults to a new random GUID.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
+    /// <param name="expectedEventBatchIndex">If set, the server rejects the write unless the aggregate's
+    /// current max event batch index matches this value (optimistic concurrency control).</param>
+    /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
+    /// that share the same <paramref name="clientId"/> and client event index.</param>
     /// <param name="ct">Cancellation token.</param>
     public Task<SuccessResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
+        long? expectedEventBatchIndex = null,
+        bool enforceClientIdempotency = false,
         CancellationToken ct = default)
         => WriteAsync(new WriteRequest
         {
@@ -191,6 +193,8 @@ public sealed class CeleriantPool : IAsyncDisposable
                 [key] = new SingleAggregateWrite
                 {
                     AllowCreate = allowCreate,
+                    ExpectedEventBatchIndex = expectedEventBatchIndex,
+                    EnforceClientIdempotency = enforceClientIdempotency,
                     Events = events,
                 }
             }
@@ -211,7 +215,6 @@ public sealed class CeleriantPool : IAsyncDisposable
             static r => r switch
             {
                 ClientResponse.Delete d => d.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for Delete."),
             },
             ct);
@@ -231,7 +234,6 @@ public sealed class CeleriantPool : IAsyncDisposable
             static r => r switch
             {
                 ClientResponse.TrimStart t => t.Value,
-                ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
                 _ => throw new ProtocolException($"Unexpected response type {r.GetType().Name} for TrimStart."),
             },
             ct);
@@ -244,6 +246,10 @@ public sealed class CeleriantPool : IAsyncDisposable
     /// Stream all event batches for an aggregate, automatically following pagination cursors.
     /// Leases a single connection for the duration of the enumeration.
     /// </summary>
+    /// <param name="key">The aggregate to read from.</param>
+    /// <param name="filters">Optional read filters. When null, reads all events from event batch index 1
+    /// with no additional filtering.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">No reachable node could be found.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
@@ -353,6 +359,7 @@ public sealed class CeleriantPool : IAsyncDisposable
         var watchOptions = options ?? new WatchOptions
         {
             TlsConfig = _options.TlsConfig,
+            IdentityConfig = _options.IdentityConfig,
         };
 
         // Try each read-eligible node until one connects successfully.

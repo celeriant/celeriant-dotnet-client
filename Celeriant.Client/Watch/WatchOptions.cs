@@ -11,12 +11,6 @@ public sealed class WatchOptions
     /// <summary>Compression type to request for watch responses. Defaults to <see cref="CompressionType.None"/>.</summary>
     public CompressionType Compression { get; init; } = CompressionType.None;
 
-    /// <summary>
-    /// If set, watch responses must arrive within this duration; <c>NextAsync(TimeSpan)</c> returns
-    /// <c>null</c> on expiry. Does not terminate the connection.
-    /// </summary>
-    public TimeSpan? Timeout { get; init; }
-
     /// <summary>The shard index at which to start for multi-shard watch. Defaults to 0.</summary>
     [EditorBrowsable(EditorBrowsableState.Advanced)]
     public long StartShard { get; init; }
@@ -32,4 +26,8 @@ public sealed class WatchOptions
 
     /// <summary>Optional TLS configuration. Plain TCP is used if null.</summary>
     public ClientTlsConfig? TlsConfig { get; init; }
+
+    /// <summary>Optional identity configuration. When set, each watch connection performs
+    /// the Identify handshake before sending the watch request.</summary>
+    public ClientIdentityConfig? IdentityConfig { get; init; }
 }

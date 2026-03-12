@@ -1,3 +1,4 @@
+using Celeriant.Client.Errors;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 using Celeriant.Client.Streaming;
@@ -73,12 +74,12 @@ public sealed class StandaloneTests
     // =========================================================================
 
     [SkippableFact]
-    public async Task NonexistentAggregate_ReturnsError7001()
+    public async Task NonexistentAggregate_ThrowsError7001()
     {
-        var resp = await Client.SendRequestAsync(
-            new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = NewKey() }));
-        var err = Assert.IsType<ClientResponse.GenericError>(resp);
-        Assert.Equal(7001u, err.Value.ErrorCode);
+        var ex = await Assert.ThrowsAsync<ReadErrorException>(
+            () => Client.SendRequestAsync(
+                new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = NewKey() })));
+        Assert.Equal(7001u, ex.Error.ErrorCode);
     }
 
     // =========================================================================
@@ -154,16 +155,16 @@ public sealed class StandaloneTests
     // =========================================================================
 
     [SkippableFact]
-    public async Task OccWrite_WrongIndex_ReturnsError()
+    public async Task OccWrite_WrongIndex_ThrowsWriteError()
     {
         var key = NewKey();
 
         await WriteAsync(key, [MakeEvent()]);
 
         // Write with wrong expected index (0 when it should be 1)
-        var resp = await WriteAsync(key, [MakeEvent(99, "should-fail")],
-            allowCreate: false, expectedBatchIndex: 0);
-        Assert.IsType<ClientResponse.GenericError>(resp);
+        await Assert.ThrowsAsync<WriteErrorException>(
+            () => WriteAsync(key, [MakeEvent(99, "should-fail")],
+                allowCreate: false, expectedBatchIndex: 0));
     }
 
     // =========================================================================
@@ -182,11 +183,18 @@ public sealed class StandaloneTests
         Assert.IsType<ClientResponse.Write>(r1);
 
         // Same client_id, same client_event_index — should be idempotent
-        var r2 = await WriteAsync(key, [MakeEvent(1, "idem-test")],
-            allowCreate: false, expectedBatchIndex: 1,
-            enforceIdempotency: true, clientId: clientId);
-        // Should succeed (idempotent) or error — but not crash
-        Assert.True(r2 is ClientResponse.Write or ClientResponse.GenericError);
+        // Should succeed (idempotent) or throw a write error — but not crash
+        try
+        {
+            var r2 = await WriteAsync(key, [MakeEvent(1, "idem-test")],
+                allowCreate: false, expectedBatchIndex: 1,
+                enforceIdempotency: true, clientId: clientId);
+            Assert.IsType<ClientResponse.Write>(r2);
+        }
+        catch (WriteErrorException)
+        {
+            // Also acceptable — server may reject the duplicate
+        }
     }
 
     // =========================================================================
@@ -208,25 +216,21 @@ public sealed class StandaloneTests
         var det = Assert.IsType<ClientResponse.AggregateDetails>(detResp);
         var maxBatch = det.Value.MaxEventBatchIndex;
 
-        // Trim: keep from maxBatch onwards
+        // Trim: keep from maxBatch onwards (throws on error)
         var trimResp = await Client.SendRequestAsync(new ClientRequest.TrimStart(new TrimStartRequest
         {
             AggregateKey = key,
             KeepFromEventBatchIndex = maxBatch,
             ClientId = Guid.NewGuid(),
         }));
-        if (trimResp is ClientResponse.GenericError trimErr)
-            throw new Exception($"Trim failed: code={trimErr.Value.ErrorCode} msg={trimErr.Value.ErrorMessage}");
         Assert.IsType<ClientResponse.TrimStart>(trimResp);
 
-        // Read from maxBatch onwards — only batch-2 should be present
+        // Read from maxBatch onwards — only batch-2 should be present (throws on error)
         var readResp = await Client.SendRequestAsync(new ClientRequest.Read(new ReadRequest
         {
             AggregateKey = key,
             Filters = ReadFilters.From(maxBatch),
         }));
-        if (readResp is ClientResponse.GenericError readErr)
-            throw new Exception($"Read after trim failed: code={readErr.Value.ErrorCode} msg={readErr.Value.ErrorMessage}");
         var read = Assert.IsType<ClientResponse.Read>(readResp);
 
         // Only batch-2 events should remain
@@ -271,12 +275,18 @@ public sealed class StandaloneTests
         Assert.IsType<ClientResponse.Delete>(deleteResp);
 
         // Verify: after delete, either details shows IsDeleted=true
-        // or the server returns an error (deleted aggregate may not be queryable)
-        var detAfter = await Client.SendRequestAsync(
-            new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = key }));
-        if (detAfter is ClientResponse.AggregateDetails detDeleted)
+        // or the server throws an error (deleted aggregate may not be queryable)
+        try
+        {
+            var detAfter = await Client.SendRequestAsync(
+                new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = key }));
+            var detDeleted = Assert.IsType<ClientResponse.AggregateDetails>(detAfter);
             Assert.True(detDeleted.Value.IsDeleted);
-        // GenericError is also acceptable — some servers don't return details for deleted aggregates
+        }
+        catch (CeleriantErrorException)
+        {
+            // Also acceptable — some servers don't return details for deleted aggregates
+        }
     }
 
     // =========================================================================

@@ -21,7 +21,7 @@ public class OptionsBuilderTests
         Assert.Equal(TimeSpan.FromSeconds(5), builder.ConnectionTimeout);
         Assert.Equal(TimeSpan.FromSeconds(30), builder.RequestTimeout);
         Assert.Equal(10_000_000L, builder.MaxRequestSize);
-        Assert.Equal(TimeSpan.FromMinutes(5), builder.IdleTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(25), builder.IdleTimeout);
         Assert.False(builder.RouteReadsToFollowers);
         Assert.Equal(CompressionType.Zstd, builder.CompressionAlgorithm);
         Assert.Equal(1024, builder.AutoCompressionThresholdBytes);
@@ -102,7 +102,7 @@ public class OptionsBuilderTests
         Assert.Equal(TimeSpan.FromSeconds(5), options.ConnectionTimeout);
         Assert.Equal(TimeSpan.FromSeconds(30), options.RequestTimeout);
         Assert.Equal(10_000_000L, options.MaxRequestSize);
-        Assert.Equal(TimeSpan.FromMinutes(5), options.IdleTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(25), options.IdleTimeout);
         Assert.False(options.RouteReadsToFollowers);
         Assert.Equal(CompressionType.Zstd, options.CompressionAlgorithm);
         Assert.Equal(1024, options.AutoCompressionThresholdBytes);

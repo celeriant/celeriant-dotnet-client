@@ -147,8 +147,9 @@ public sealed class CeleriantClient : IAsyncDisposable
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Set the maximum allowed request/response payload size in bytes.
+    /// Set the maximum allowed request payload size in bytes.
     /// Requests larger than this will throw. Default is 10 MB.
+    /// Note: this mutates the current instance and returns it for chaining.
     /// </summary>
     public CeleriantClient WithMaxRequestSize(long maxRequestSize)
     {
@@ -159,6 +160,7 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>
     /// Set the maximum allowed response payload size in bytes.
     /// Responses larger than this will throw. Default is 64 MB.
+    /// Note: this mutates the current instance and returns it for chaining.
     /// </summary>
     public CeleriantClient WithMaxResponseSize(long maxResponseSize)
     {
@@ -168,6 +170,7 @@ public sealed class CeleriantClient : IAsyncDisposable
 
     /// <summary>
     /// Set a per-request timeout applied to each <see cref="SendRequestAsync(ClientRequest, CompressionType, CancellationToken)"/> call.
+    /// Note: this mutates the current instance and returns it for chaining.
     /// </summary>
     public CeleriantClient WithTimeout(TimeSpan timeout)
     {
@@ -292,7 +295,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.Read r => r.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for Read."),
         };
     }
@@ -311,7 +313,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.Write w => w.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for Write."),
         };
     }
@@ -321,12 +322,18 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID for idempotency. Defaults to a new random GUID.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
+    /// <param name="expectedEventBatchIndex">If set, the server rejects the write unless the aggregate's
+    /// current max event batch index matches this value (optimistic concurrency control).</param>
+    /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
+    /// that share the same <paramref name="clientId"/> and client event index.</param>
     /// <param name="ct">Cancellation token.</param>
     public Task<SuccessResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
+        long? expectedEventBatchIndex = null,
+        bool enforceClientIdempotency = false,
         CancellationToken ct = default)
         => WriteAsync(new WriteRequest
         {
@@ -336,6 +343,8 @@ public sealed class CeleriantClient : IAsyncDisposable
                 [key] = new SingleAggregateWrite
                 {
                     AllowCreate = allowCreate,
+                    ExpectedEventBatchIndex = expectedEventBatchIndex,
+                    EnforceClientIdempotency = enforceClientIdempotency,
                     Events = events,
                 }
             }
@@ -354,7 +363,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.Delete d => d.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for Delete."),
         };
     }
@@ -372,7 +380,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.TrimStart t => t.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for TrimStart."),
         };
     }
@@ -389,7 +396,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.AggregateDetails d => d.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for AggregateDetails."),
         };
     }
@@ -398,6 +404,7 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <param name="request">The register-schema request.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader.</exception>
     public async Task<SuccessResponse> RegisterSchemaAsync(
         RegisterSchemaRequest request,
         CancellationToken ct = default)
@@ -406,7 +413,6 @@ public sealed class CeleriantClient : IAsyncDisposable
         return response switch
         {
             ClientResponse.RegisterSchema s => s.Value,
-            ClientResponse.GenericError e => throw new CeleriantErrorException(e.Value),
             _ => throw new ProtocolException($"Unexpected response type {response.GetType().Name} for RegisterSchema."),
         };
     }
@@ -418,9 +424,9 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>
     /// Send a request and receive a typed response.
     ///
-    /// Throws for transport/protocol errors. Server-side errors are returned as
-    /// <see cref="ClientResponse.GenericError"/> unless they are <see cref="NotLeaderException"/>
-    /// or <see cref="IdentityRequiredException"/> special cases.
+    /// Throws for transport/protocol errors. Server-side errors always throw a
+    /// <see cref="CeleriantErrorException"/> subclass. <see cref="NotLeaderException"/> and
+    /// <see cref="IdentityRequiredException"/> are thrown for their respective error codes.
     /// </summary>
     /// <param name="request">The request discriminated union variant to send.</param>
     /// <param name="compression">
@@ -634,47 +640,58 @@ public sealed class CeleriantClient : IAsyncDisposable
             ? WireHeader.ForRequest(messageTypeId, compressedLength)
             : WireHeader.ForCompressedRequest(messageTypeId, compressedLength, uncompressedLength, effectiveCompression);
 
-        // Write header + payload in one call
-        int totalLen = WireHeader.Size + payload.Length;
-        byte[] combined = ArrayPool<byte>.Shared.Rent(totalLen);
         try
         {
-            header.WriteTo(combined);
-            Buffer.BlockCopy(payload, 0, combined, WireHeader.Size, payload.Length);
-            _stream.Write(combined, 0, totalLen);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(combined);
-        }
-
-        // Read 17-byte response header — stackalloc avoids heap allocation
-        Span<byte> headerBuf = stackalloc byte[WireHeader.Size];
-        ReadExactSync(headerBuf);
-        var responseHeader = WireHeader.ParseFrom(headerBuf);
-
-        // Read response payload into pooled buffer
-        int respLen = (int)responseHeader.CompressedLength;
-        byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
-        try
-        {
-            ReadExactSync(responsePayload.AsSpan(0, respLen));
-
-            if (responseHeader.CompressedLength != responseHeader.UncompressedLength)
+            // Write header + payload in one call
+            int totalLen = WireHeader.Size + payload.Length;
+            byte[] combined = ArrayPool<byte>.Shared.Rent(totalLen);
+            try
             {
-                var responseCompression = (CompressionType)responseHeader.CompressionType;
-                // Decompress needs its own byte[] — only happens for compressed responses
-                byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
-                byte[] decompressed = WireCodec.Decompress(compressed, responseCompression, responseHeader.UncompressedLength);
-                return DeserializeResponse(responseHeader.MessageType, decompressed);
+                header.WriteTo(combined);
+                Buffer.BlockCopy(payload, 0, combined, WireHeader.Size, payload.Length);
+                _stream.Write(combined, 0, totalLen);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(combined);
             }
 
-            return DeserializeResponse(responseHeader.MessageType,
-                new ReadOnlyMemory<byte>(responsePayload, 0, respLen));
+            // Read 17-byte response header — stackalloc avoids heap allocation
+            Span<byte> headerBuf = stackalloc byte[WireHeader.Size];
+            ReadExactSync(headerBuf);
+            var responseHeader = WireHeader.ParseFrom(headerBuf);
+
+            // Read response payload into pooled buffer
+            int respLen = (int)responseHeader.CompressedLength;
+            byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
+            try
+            {
+                ReadExactSync(responsePayload.AsSpan(0, respLen));
+
+                if (responseHeader.CompressedLength != responseHeader.UncompressedLength)
+                {
+                    var responseCompression = (CompressionType)responseHeader.CompressionType;
+                    // Decompress needs its own byte[] — only happens for compressed responses
+                    byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
+                    byte[] decompressed = WireCodec.Decompress(compressed, responseCompression, responseHeader.UncompressedLength);
+                    return DeserializeResponse(responseHeader.MessageType, decompressed);
+                }
+
+                return DeserializeResponse(responseHeader.MessageType,
+                    new ReadOnlyMemory<byte>(responsePayload, 0, respLen));
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(responsePayload);
+            }
         }
-        finally
+        catch (EndOfStreamException ex)
         {
-            ArrayPool<byte>.Shared.Return(responsePayload);
+            throw new ConnectionFailedException("Connection closed during request.", ex);
+        }
+        catch (IOException ex)
+        {
+            throw new ConnectionFailedException("IO error during request.", ex);
         }
     }
 
@@ -798,11 +815,7 @@ public sealed class CeleriantClient : IAsyncDisposable
         {
             throw;
         }
-        catch (NotLeaderException)
-        {
-            throw;
-        }
-        catch (IdentityRequiredException)
+        catch (CeleriantClientException)
         {
             throw;
         }
@@ -813,8 +826,8 @@ public sealed class CeleriantClient : IAsyncDisposable
     }
 
     /// <summary>
-    /// Map a deserialized <see cref="ErrorResponse"/> to either a thrown exception (for special
-    /// error codes) or a <see cref="ClientResponse.GenericError"/>.
+    /// Map a deserialized <see cref="ErrorResponse"/> to a typed exception.
+    /// Always throws — never returns.
     /// </summary>
     private static ClientResponse MapErrorResponse(ErrorResponse error)
     {
@@ -824,7 +837,7 @@ public sealed class CeleriantClient : IAsyncDisposable
         if (error.IsIdentityRequired)
             throw new IdentityRequiredException(error);
 
-        return new ClientResponse.GenericError(error);
+        throw ErrorExceptionFactory.Create(error);
     }
 
     /// <summary>

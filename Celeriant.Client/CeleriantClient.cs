@@ -16,7 +16,7 @@ namespace Celeriant.Client;
 /// Use <see cref="ConnectAsync(string, CancellationToken)"/> or one of the other static factory
 /// methods to create an instance.
 /// </summary>
-public sealed class CeleriantClient : IAsyncDisposable
+public sealed class CeleriantClient : ICeleriantClient
 {
     private readonly TcpClient _tcpClient;
     private readonly Stream _stream;
@@ -286,7 +286,8 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send a read request and return the typed response.</summary>
     /// <param name="request">The read request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
+    /// <exception cref="BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="BatchIndexUnavailableException.MinimumAvailableBatchIndex"/>.</exception>
     public async Task<ReadResponse> ReadAsync(
         ReadRequest request,
         CancellationToken ct = default)
@@ -302,9 +303,13 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send a write request and return the typed response.</summary>
     /// <param name="request">The write request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
-    /// <exception cref="NotLeaderException">The target node is not the leader. The caller should
-    /// retry against <see cref="NotLeaderException.LeaderAddress"/>.</exception>
+    /// <exception cref="WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="IdempotencyViolationException">Duplicate write — the event was already accepted. No action needed.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist and <c>AllowCreate</c> is false.</exception>
+    /// <exception cref="AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
+    /// <exception cref="SchemaValidationException">An event payload does not conform to the registered schema.</exception>
+    /// <exception cref="ShardRoutingException">A multi-aggregate write targets aggregates on different shards.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public async Task<SuccessResponse> WriteAsync(
         WriteRequest request,
         CancellationToken ct = default)
@@ -327,6 +332,12 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
     /// that share the same <paramref name="clientId"/> and client event index.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="IdempotencyViolationException">Duplicate write — the event was already accepted. No action needed.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist and <paramref name="allowCreate"/> is false.</exception>
+    /// <exception cref="AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
+    /// <exception cref="SchemaValidationException">An event payload does not conform to the registered schema.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public Task<SuccessResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
@@ -353,8 +364,9 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send a delete request and return the typed response.</summary>
     /// <param name="request">The delete request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
-    /// <exception cref="NotLeaderException">The target node is not the leader.</exception>
+    /// <exception cref="DeleteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public async Task<SuccessResponse> DeleteAsync(
         DeleteRequest request,
         CancellationToken ct = default)
@@ -370,8 +382,9 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send a trim-start request and return the typed response.</summary>
     /// <param name="request">The trim-start request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
-    /// <exception cref="NotLeaderException">The target node is not the leader.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
+    /// <exception cref="TrimIndexOutOfRangeException">The trim index is beyond the aggregate's current range.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public async Task<SuccessResponse> TrimStartAsync(
         TrimStartRequest request,
         CancellationToken ct = default)
@@ -387,7 +400,7 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send an aggregate details request and return the typed response.</summary>
     /// <param name="request">The aggregate details request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
     public async Task<AggregateDetailsResponse> AggregateDetailsAsync(
         AggregateDetailsRequest request,
         CancellationToken ct = default)
@@ -403,8 +416,8 @@ public sealed class CeleriantClient : IAsyncDisposable
     /// <summary>Send a register-schema request and return the typed response.</summary>
     /// <param name="request">The register-schema request.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <exception cref="CeleriantErrorException">The server returned an error.</exception>
-    /// <exception cref="NotLeaderException">The target node is not the leader.</exception>
+    /// <exception cref="SchemaErrorException">The schema is invalid, unsupported, or already registered.</exception>
+    /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public async Task<SuccessResponse> RegisterSchemaAsync(
         RegisterSchemaRequest request,
         CancellationToken ct = default)

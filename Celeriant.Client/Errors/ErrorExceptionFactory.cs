@@ -18,8 +18,9 @@ internal static class ErrorExceptionFactory
         {
             // --- Read errors (1xxx) ---
             ErrorResponse.ReadUnavailableBatchIndex
-                or ErrorResponse.ReadAggregateNotExists
-                => new ReadErrorException(error),
+                => new BatchIndexUnavailableException(error),
+            ErrorResponse.ReadAggregateNotExists
+                => new AggregateNotFoundException(error),
             ErrorResponse.ReadCacheLoadLockTimeout
                 or ErrorResponse.ReadCacheLoadFileScan
                 or ErrorResponse.ReadFetchDatablocks
@@ -27,6 +28,14 @@ internal static class ErrorExceptionFactory
                 => new ServerInternalErrorException(error),
 
             // --- Write errors (2xxx) ---
+            ErrorResponse.WriteOptimisticConcurrencyViolation
+                => new WriteOccException(error),
+            ErrorResponse.WriteClientIdempotencyViolation
+                => new IdempotencyViolationException(error),
+            ErrorResponse.WriteAggregateNotExists
+                => new AggregateNotFoundException(error),
+            ErrorResponse.WriteAggregateRecreateNotAllowed
+                => new AggregateRecreateNotAllowedException(error),
             >= ErrorResponse.WriteEmptyEventsList and <= ErrorResponse.WriteAggregateRecreateNotAllowed
                 => new WriteErrorException(error),
             ErrorResponse.WriteReplicationError
@@ -39,9 +48,10 @@ internal static class ErrorExceptionFactory
                 => new CeleriantErrorException(error),
 
             // --- Schema errors (2020-2029) ---
+            ErrorResponse.WriteSchemaValidationFailed
+                => new SchemaValidationException(error),
             ErrorResponse.RegisterSchemaAlreadyExists
                 or ErrorResponse.RegisterSchemaInvalid
-                or ErrorResponse.WriteSchemaValidationFailed
                 or ErrorResponse.WriteSchemaCompilationFailed
                 or ErrorResponse.RegisterSchemaUnsupportedType
                 => new SchemaErrorException(error),
@@ -56,8 +66,9 @@ internal static class ErrorExceptionFactory
 
             // --- Trim errors (3xxx) ---
             ErrorResponse.TrimAggregateNotExists
-                or ErrorResponse.TrimIndexOutOfRange
-                => new TrimErrorException(error),
+                => new AggregateNotFoundException(error),
+            ErrorResponse.TrimIndexOutOfRange
+                => new TrimIndexOutOfRangeException(error),
             ErrorResponse.TrimCacheError
                 or ErrorResponse.TrimReplicationError
                 or ErrorResponse.TrimFsyncError
@@ -67,9 +78,11 @@ internal static class ErrorExceptionFactory
                 => new CeleriantErrorException(error),
 
             // --- Delete errors (4xxx) ---
+            ErrorResponse.DeleteOptimisticConcurrencyViolation
+                => new DeleteOccException(error),
             ErrorResponse.DeleteAggregateNotExists
-                or ErrorResponse.DeleteEmptyDeleteList
-                or ErrorResponse.DeleteOptimisticConcurrencyViolation
+                => new AggregateNotFoundException(error),
+            ErrorResponse.DeleteEmptyDeleteList
                 => new DeleteErrorException(error),
             ErrorResponse.DeleteCacheError
                 or ErrorResponse.DeleteReplicationError
@@ -93,7 +106,7 @@ internal static class ErrorExceptionFactory
 
             // --- Exists / aggregate-details errors (7xxx) ---
             ErrorResponse.ExistsAggregateNotExists
-                => new ReadErrorException(error),
+                => new AggregateNotFoundException(error),
             ErrorResponse.ExistsCacheError
                 or ErrorResponse.ExistsMetablockReadError
                 => new ServerInternalErrorException(error),
@@ -108,8 +121,9 @@ internal static class ErrorExceptionFactory
                 => new ServerInternalErrorException(error),
 
             // --- Shard routing errors (9xxx) — typically handled by list/watch retry logic ---
+            ErrorResponse.ShardRoutingMultipleShards
+                => new ShardRoutingException(error),
             ErrorResponse.ShardRoutingNoKey
-                or ErrorResponse.ShardRoutingMultipleShards
                 or ErrorResponse.ShardRoutingIncompatibleFilters
                 => new CeleriantErrorException(error),
 

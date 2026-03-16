@@ -9,7 +9,7 @@ namespace Celeriant.Client;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Register a <see cref="CeleriantPool"/> as a singleton in the DI container.
+    /// Register an <see cref="ICeleriantPool"/> singleton in the DI container.
     ///
     /// <para>
     /// Usage in <c>Program.cs</c>:
@@ -32,13 +32,12 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.AddSingleton<CeleriantPool>(sp =>
+        services.AddSingleton<ICeleriantPool>(sp =>
         {
             var builder = new CeleriantPoolOptionsBuilder();
             configure(builder);
             return new CeleriantPool(builder.Build());
         });
-        services.AddSingleton<ICeleriantPool>(sp => sp.GetRequiredService<CeleriantPool>());
 
         return services;
     }

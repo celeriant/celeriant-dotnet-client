@@ -81,9 +81,9 @@ public sealed class TypedMethodTests
     }
 
     [SkippableFact]
-    public async Task ReadAsync_NonexistentAggregate_ThrowsReadErrorException()
+    public async Task ReadAsync_NonexistentAggregate_ThrowsAggregateNotFoundException()
     {
-        await Assert.ThrowsAsync<ReadErrorException>(
+        await Assert.ThrowsAsync<AggregateNotFoundException>(
             () => Client.ReadAsync(new ReadRequest
             {
                 AggregateKey = TestHelpers.NewKey(),
@@ -109,9 +109,9 @@ public sealed class TypedMethodTests
     }
 
     [SkippableFact]
-    public async Task AggregateDetailsAsync_NonexistentAggregate_ThrowsReadErrorException()
+    public async Task AggregateDetailsAsync_NonexistentAggregate_ThrowsAggregateNotFoundException()
     {
-        await Assert.ThrowsAsync<ReadErrorException>(
+        await Assert.ThrowsAsync<AggregateNotFoundException>(
             () => Client.AggregateDetailsAsync(
                 new AggregateDetailsRequest { AggregateKey = TestHelpers.NewKey() }));
     }

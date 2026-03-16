@@ -76,7 +76,7 @@ public sealed class StandaloneTests
     [SkippableFact]
     public async Task NonexistentAggregate_ThrowsError7001()
     {
-        var ex = await Assert.ThrowsAsync<ReadErrorException>(
+        var ex = await Assert.ThrowsAsync<AggregateNotFoundException>(
             () => Client.SendRequestAsync(
                 new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = NewKey() })));
         Assert.Equal(7001u, ex.Error.ErrorCode);
@@ -162,7 +162,7 @@ public sealed class StandaloneTests
         await WriteAsync(key, [MakeEvent()]);
 
         // Write with wrong expected index (0 when it should be 1)
-        await Assert.ThrowsAsync<WriteErrorException>(
+        await Assert.ThrowsAsync<WriteOccException>(
             () => WriteAsync(key, [MakeEvent(99, "should-fail")],
                 allowCreate: false, expectedBatchIndex: 0));
     }

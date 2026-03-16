@@ -34,7 +34,7 @@ public class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddCeleriantPool(o => o.Address = "localhost:10000");
 
-        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(CeleriantPool));
+        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(ICeleriantPool));
         Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
     }
 
@@ -52,13 +52,14 @@ public class ServiceCollectionExtensionsTests
 
         // Build the provider to trigger the factory
         var provider = services.BuildServiceProvider();
-        var pool = provider.GetRequiredService<CeleriantPool>();
+        var pool = provider.GetRequiredService<ICeleriantPool>();
 
         Assert.True(invoked);
         Assert.NotNull(pool);
 
         // Clean up
-        _ = pool.DisposeAsync();
+        if (pool is IAsyncDisposable disposable)
+            _ = disposable.DisposeAsync();
     }
 
     [Fact]
@@ -68,6 +69,6 @@ public class ServiceCollectionExtensionsTests
         services.AddCeleriantPool(o => { /* Address not set */ });
 
         var provider = services.BuildServiceProvider();
-        Assert.Throws<InvalidOperationException>(() => provider.GetRequiredService<CeleriantPool>());
+        Assert.Throws<InvalidOperationException>(() => provider.GetRequiredService<ICeleriantPool>());
     }
 }

@@ -4,6 +4,8 @@ Official .NET client for [Celeriant](https://github.com/celeriant/celeriant) —
 
 Targets `net8.0`. Zero external runtime dependencies beyond `MessagePack` for serialisation and `ZstdSharp`/`Snappier` for compression.
 
+For a deeper walkthrough — aggregate modelling, schemas, watch API, connection pool internals — see the [usage guide](docs/guide.md).
+
 ## Quick start
 
 ### 1. Start the server
@@ -17,15 +19,12 @@ docker compose up -d
 ```csharp
 await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
 
+var serializer = JsonEventSerializer.Default;
 var key = new AggregateKey(orgId: myOrg, aggregateTypeId: myType, aggregateId: orderId);
 
-await client.WriteAsync(key, [new AggregateEvent
-{
-    ClientEventIndex = 1,
-    EventTimestamp = DateTimeOffset.UtcNow,
-    EventTypeMajor = 1,
-    EventValue = payload,
-}]);
+await client.WriteAsync(key, [
+    AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, 99.95m), serializer)
+]);
 ```
 
 ### 3. Read it back
@@ -36,11 +35,13 @@ var response = await client.ReadAsync(new ReadRequest
     AggregateKey = key,
     Filters = ReadFilters.From(1)
 });
+
+var order = response.EventBatches[0].Events[0].GetValue<OrderPlaced>(serializer);
 ```
 
 ## Connection pool
 
-For production use, `CeleriantPool` manages connections, routes writes to the leader, and distributes reads across nodes.
+For production use, `CeleriantPool` manages connections, routes writes to the leader, and distributes reads across nodes. It implements `ICeleriantPool` for easy testing and DI.
 
 ```csharp
 await using var pool = new CeleriantPool(new CeleriantPoolOptions
@@ -53,7 +54,9 @@ await pool.WriteAsync(key, events);
 var read = await pool.ReadAsync(readRequest);
 ```
 
-With DI:
+The pool also supports `DeleteAsync`, `TrimStartAsync`, `AggregateDetailsAsync`, `RegisterSchemaAsync`, `WatchAsync`, `ReadAllAsync` (streaming), and listing operations (`ListOrgsAsync`, `ListAggregateTypesAsync`, `ListAggregatesAsync`).
+
+With DI (registers `ICeleriantPool` as a singleton):
 
 ```csharp
 builder.Services.AddCeleriantPool(options =>
@@ -61,6 +64,15 @@ builder.Services.AddCeleriantPool(options =>
     options.Address = "localhost:10000";
     options.MaxConnections = 20;
 });
+```
+
+Then inject `ICeleriantPool` into your services:
+
+```csharp
+public class MyService(ICeleriantPool pool)
+{
+    public Task DoWork() => pool.ReadAsync(...);
+}
 ```
 
 ## TLS / mTLS

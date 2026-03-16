@@ -125,7 +125,7 @@ public sealed class StreamingTests
     {
         var key = TestHelpers.NewKey();
 
-        await Assert.ThrowsAsync<Errors.ReadErrorException>(async () =>
+        await Assert.ThrowsAsync<Errors.AggregateNotFoundException>(async () =>
         {
             await foreach (var _ in Client.ReadAllAsync(key))
             {

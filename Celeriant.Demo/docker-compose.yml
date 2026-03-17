@@ -1,0 +1,35 @@
+services:
+  celeriant-server:
+    image: celeriant-server:latest
+    ports:
+      - "10000:10000"
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    command:
+      - "--standalone"
+      - "--data-root"
+      - "/var/lib/celeriant"
+      - "--client-port"
+      - "10000"
+      - "--num-shards"
+      - "1"
+      - "--log-level"
+      - "warn"
+    volumes:
+      - celeriant-data:/var/lib/celeriant
+
+  demo-api:
+    build: .
+    ports:
+      - "5000:8080"
+    environment:
+      - Celeriant__Address=celeriant-server:10000
+    depends_on:
+      - celeriant-server
+
+volumes:
+  celeriant-data:

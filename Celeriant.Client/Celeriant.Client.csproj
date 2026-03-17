@@ -19,8 +19,8 @@
     <Authors>Celeriant</Authors>
     <Description>Official .NET client for Celeriant — the distributed event store built for event sourcing at scale.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/celeriant/celeriant-dotnet-client</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/celeriant/celeriant-dotnet-client</RepositoryUrl>
+    <PackageProjectUrl>https://celeriant.io</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/celeriant/celeriant-db</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>event-sourcing;cqrs;event-store;celeriant;distributed-systems</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

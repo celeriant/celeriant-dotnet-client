@@ -1,10 +1,22 @@
 # Celeriant .NET Client
 
-Official .NET client for [Celeriant](https://github.com/celeriant/celeriant) — the event store built for event-sourcing at scale.
+Official .NET client for [Celeriant](https://celeriant.io) — the distributed event store built for event sourcing at scale.
 
-Targets `net8.0`. Zero external runtime dependencies beyond `MessagePack` for serialisation and `ZstdSharp`/`Snappier` for compression.
+Celeriant is an event store that lets you enforce business invariants at write time across multiple streams, without distributed transactions. Optimistic concurrency control, strict event ordering, exactly-once writes, schema validation, and cluster-wide durability — all built in. PostgreSQL gives you correctness but not throughput. Kafka gives you throughput but not correctness. Celeriant gives you both.
+
+- [Website](https://celeriant.io)
+- [Documentation](https://docs.celeriant.io)
+- [GitHub](https://github.com/celeriant/celeriant-db)
+
+Targets `net8.0`, `net9.0`, and `net10.0`. Dependencies are `MessagePack` for serialisation and `ZstdSharp`/`Snappier` for compression.
 
 For a deeper walkthrough — aggregate modelling, schemas, watch API, connection pool internals — see the [usage guide](docs/guide.md).
+
+## Install
+
+```bash
+dotnet add package Celeriant.Client --prerelease
+```
 
 ## Quick start
 
@@ -89,6 +101,11 @@ test-certs/generate.sh
 docker compose -f docker-compose.tls.yml up -d
 dotnet test
 ```
+
+## Examples
+
+- **[Celeriant.Demo](Celeriant.Demo/)** — simple browser-based banking demo. `cd Celeriant.Demo && docker compose up -d` to start everything. Shows basic read/write patterns with a minimal UI.
+- **[Celeriant.Reference](Celeriant.Reference/)** — production-grade reference API with Postgres read projections, exactly-once writes, OCC retry loops, and multi-aggregate transfers. `cd Celeriant.Reference && docker compose up -d` to start everything.
 
 ## Running tests
 

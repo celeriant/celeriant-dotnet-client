@@ -1,0 +1,58 @@
+services:
+  celeriant-server:
+    image: celeriant-server:latest
+    ports:
+      - "10000:10000"
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    command:
+      - "--standalone"
+      - "--data-root"
+      - "/var/lib/celeriant"
+      - "--client-port"
+      - "10000"
+      - "--num-shards"
+      - "1"
+      - "--log-level"
+      - "warn"
+    volumes:
+      - celeriant-data:/var/lib/celeriant
+
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: celeriant_reference
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d celeriant_reference"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  reference-api:
+    build:
+      context: ..
+      dockerfile: Celeriant.Reference/Dockerfile
+    ports:
+      - "5001:8080"
+    environment:
+      - Celeriant__Address=celeriant-server:10000
+      - ConnectionStrings__Postgres=Host=postgres;Database=celeriant_reference;Username=demo;Password=demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      celeriant-server:
+        condition: service_started
+
+volumes:
+  celeriant-data:
+  pg-data:

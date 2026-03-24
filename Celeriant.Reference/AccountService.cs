@@ -141,6 +141,7 @@ public sealed class AccountService(
     {
         var projection = await CatchUpAsync(accountId, ct: ct);
         var clientEventIndex = projection.MaxClientEventIndex + 1;
+        var reDeriveCei = false;
 
         for (var attempt = 1; attempt <= MaxRetries; attempt++)
         {
@@ -148,8 +149,11 @@ public sealed class AccountService(
             {
                 await Backoff(attempt, ct);
                 projection = await CatchUpAsync(accountId, ct: ct);
-                // clientEventIndex is NOT updated here — see below for why each catch block
-                // makes the right choice about whether to re-derive or hold constant.
+                if (reDeriveCei)
+                {
+                    clientEventIndex = projection.MaxClientEventIndex + 1;
+                    reDeriveCei = false;
+                }
             }
 
             if (amountCents <= 0)
@@ -179,11 +183,8 @@ public sealed class AccountService(
             }
             catch (WriteOccException) when (attempt < MaxRetries)
             {
-                // OCC means our write was definitively rejected — it never landed.
-                // Re-derive clientEventIndex so a concurrent writer's index doesn't cause
-                // a false IdempotencyViolation on our next attempt.
                 logger.LogDebug("OCC conflict on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
-                clientEventIndex = projection.MaxClientEventIndex + 1;
+                reDeriveCei = true;
                 continue;
             }
             catch (CeleriantTimeoutException) when (attempt < MaxRetries)
@@ -212,6 +213,7 @@ public sealed class AccountService(
     {
         var projection = await CatchUpAsync(accountId, ct: ct);
         var clientEventIndex = projection.MaxClientEventIndex + 1;
+        var reDeriveCei = false;
 
         for (var attempt = 1; attempt <= MaxRetries; attempt++)
         {
@@ -219,6 +221,11 @@ public sealed class AccountService(
             {
                 await Backoff(attempt, ct);
                 projection = await CatchUpAsync(accountId, ct: ct);
+                if (reDeriveCei)
+                {
+                    clientEventIndex = projection.MaxClientEventIndex + 1;
+                    reDeriveCei = false;
+                }
             }
 
             if (amountCents <= 0)
@@ -252,7 +259,7 @@ public sealed class AccountService(
             catch (WriteOccException) when (attempt < MaxRetries)
             {
                 logger.LogDebug("OCC conflict on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
-                clientEventIndex = projection.MaxClientEventIndex + 1;
+                reDeriveCei = true;
                 continue;
             }
             catch (CeleriantTimeoutException) when (attempt < MaxRetries)
@@ -287,6 +294,7 @@ public sealed class AccountService(
         // Derive ClientEventIndex for each aggregate independently — per (AggregateKey, ClientId)
         var fromClientEventIndex = fromProjection.MaxClientEventIndex + 1;
         var toClientEventIndex = toProjection.MaxClientEventIndex + 1;
+        var reDeriveCei = false;
 
         for (var attempt = 1; attempt <= MaxRetries; attempt++)
         {
@@ -295,7 +303,12 @@ public sealed class AccountService(
                 await Backoff(attempt, ct);
                 fromProjection = await CatchUpAsync(fromAccountId, ct: ct);
                 toProjection = await CatchUpAsync(toAccountId, ct: ct);
-                // Hold clientEventIndexes constant — see K-FAIL analysis
+                if (reDeriveCei)
+                {
+                    fromClientEventIndex = fromProjection.MaxClientEventIndex + 1;
+                    toClientEventIndex = toProjection.MaxClientEventIndex + 1;
+                    reDeriveCei = false;
+                }
             }
 
             if (amountCents <= 0)
@@ -359,8 +372,7 @@ public sealed class AccountService(
             {
                 logger.LogDebug("OCC conflict on transfer {From}->{To}, attempt {Attempt}",
                     fromAccountId, toAccountId, attempt);
-                fromClientEventIndex = fromProjection.MaxClientEventIndex + 1;
-                toClientEventIndex = toProjection.MaxClientEventIndex + 1;
+                reDeriveCei = true;
                 continue;
             }
             catch (CeleriantTimeoutException) when (attempt < MaxRetries)

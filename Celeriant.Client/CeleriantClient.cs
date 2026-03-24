@@ -850,6 +850,9 @@ public sealed class CeleriantClient : ICeleriantClient
         if (error.IsIdentityRequired)
             throw new IdentityRequiredException(error);
 
+        if (error.IsServerBusy)
+            throw new ServerBusyException(error);
+
         throw ErrorExceptionFactory.Create(error);
     }
 

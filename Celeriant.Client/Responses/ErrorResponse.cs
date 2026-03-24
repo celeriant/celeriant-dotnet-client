@@ -86,6 +86,10 @@ public sealed class ErrorResponse
     public const uint ShardRoutingMultipleShards = 9001;
     public const uint ShardRoutingIncompatibleFilters = 9002;
 
+    // --- Server health errors: 11xxx ---
+    /// <summary>Shard's inter-shard channel is full — request could not be routed. Client should retry.</summary>
+    public const uint ServerBusy = 11000;
+
     // --- Identity & authentication errors: 10xxx ---
     public const uint IdentifyInvalidNonce = 10001;
     public const uint IdentifyInvalidSignature = 10002;
@@ -113,6 +117,9 @@ public sealed class ErrorResponse
 
     [IgnoreMember]
     public bool IsIdentityRequired => ErrorCode == IdentifyRequired;
+
+    [IgnoreMember]
+    public bool IsServerBusy => ErrorCode == ServerBusy;
 
     /// <summary>
     /// The error message parsed as a flat JSON object. Each key maps to its raw

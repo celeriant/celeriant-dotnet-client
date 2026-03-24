@@ -10,12 +10,12 @@ Celeriant is an event store that lets you enforce business invariants at write t
 
 Targets `net8.0`, `net9.0`, and `net10.0`. Dependencies are `MessagePack` for serialisation and `ZstdSharp`/`Snappier` for compression.
 
-For a deeper walkthrough — aggregate modelling, schemas, watch API, connection pool internals — see the [usage guide](docs/guide.md).
+For a deeper walkthrough — aggregate modelling, schemas, watch API, connection pool internals — see the [usage guide](https://github.com/celeriant/celeriant-dotnet-client/blob/main/docs/guide.md).
 
 ## Install
 
 ```bash
-dotnet add package Celeriant.Client --prerelease
+dotnet add package Celeriant.Client
 ```
 
 ## Quick start
@@ -104,8 +104,8 @@ dotnet test
 
 ## Examples
 
-- **[Celeriant.Demo](Celeriant.Demo/)** — simple browser-based banking demo. `cd Celeriant.Demo && docker compose up -d` to start everything. Shows basic read/write patterns with a minimal UI.
-- **[Celeriant.Reference](Celeriant.Reference/)** — production-grade reference API with Postgres read projections, exactly-once writes, OCC retry loops, and multi-aggregate transfers. `cd Celeriant.Reference && docker compose up -d` to start everything.
+- **[Celeriant.Demo](https://github.com/celeriant/celeriant-dotnet-client/tree/main/Celeriant.Demo)** — simple browser-based banking demo. `cd Celeriant.Demo && docker compose up -d` to start everything. Shows basic read/write patterns with a minimal UI.
+- **[Celeriant.Reference](https://github.com/celeriant/celeriant-dotnet-client/tree/main/Celeriant.Reference)** — production-grade reference API with Postgres read projections, exactly-once writes, OCC retry loops, and multi-aggregate transfers. `cd Celeriant.Reference && docker compose up -d` to start everything.
 
 ## Running tests
 

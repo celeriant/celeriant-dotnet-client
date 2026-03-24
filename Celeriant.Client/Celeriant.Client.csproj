@@ -15,7 +15,7 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>Celeriant.Client</PackageId>
-    <Version>0.1.0-beta.1</Version>
+    <Version>0.2.0</Version>
     <Authors>Celeriant</Authors>
     <Description>Official .NET client for Celeriant — the distributed event store built for event sourcing at scale.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

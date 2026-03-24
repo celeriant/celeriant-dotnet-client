@@ -514,6 +514,10 @@ public sealed class CeleriantPool : ICeleriantPool
             {
                 continue;
             }
+            catch (ServerBusyException) when (i < nodeAddresses.Length - 1)
+            {
+                continue;
+            }
         }
 
         throw new ConnectionFailedException("All known nodes are unreachable.");
@@ -574,6 +578,13 @@ public sealed class CeleriantPool : ICeleriantPool
             catch (ConnectionFailedException)
             {
                 // Connection dropped or unreachable. Try next known node.
+                var next = GetNextUntried(triedNodes);
+                if (next is null) throw;
+                currentTarget = next;
+            }
+            catch (ServerBusyException)
+            {
+                // Server too busy to route request. Try next known node.
                 var next = GetNextUntried(triedNodes);
                 if (next is null) throw;
                 currentTarget = next;

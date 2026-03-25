@@ -28,6 +28,147 @@ A few modelling examples:
 
 There's no cardinality limit. Millions of aggregates, billions of events. Celeriant's storage engine uses bloom filters and bounded memory — it won't fall over like a PostgreSQL index would.
 
+## Connections and the pool
+
+### Connections are cheap
+
+Celeriant connections are plain TCP sockets. Not like PostgreSQL where each connection spawns a server process. There's no session state, no connection overhead worth worrying about. Connect, send requests, dispose.
+
+```csharp
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
+```
+
+A single connection is fine for simple use cases, scripts, or admin tools. The client reuses the TCP connection across multiple requests.
+
+### The pool
+
+For production workloads, `CeleriantPool` is what you want. It manages a set of connections and routes operations to the right node:
+
+- **Writes** always go to the leader. If the leader moves (failover), the pool detects this and reroutes automatically.
+- **Reads** are distributed across all nodes via round-robin. Set `RouteReadsToFollowers = true` if you want to keep the leader free for writes.
+
+```csharp
+await using var pool = new CeleriantPool(new CeleriantPoolOptions
+{
+    Address = "localhost:10000",
+    MaxConnections = 20,
+    RouteReadsToFollowers = true,
+});
+```
+
+The pool is fully thread-safe. Share a single instance across your application. It handles connection lifecycle, failover, and node discovery.
+
+Key pool options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `MaxConnections` | 10 | Connection pool ceiling |
+| `ConnectionTimeout` | 5s | TCP connect timeout |
+| `RequestTimeout` | 30s | Per-request timeout |
+| `IdleTimeout` | 25s | Close idle connections (must be below server's `slow_client_timeout`) |
+| `RouteReadsToFollowers` | false | Keep the leader free for writes |
+| `CompressionAlgorithm` | Zstd | Auto-compress large payloads |
+| `AutoCompressionThresholdBytes` | 1024 | Minimum payload size before compression kicks in |
+
+### DI registration
+
+```csharp
+builder.Services.AddCeleriantPool(options =>
+{
+    options.Address = "localhost:10000";
+    options.MaxConnections = 20;
+});
+```
+
+This registers `ICeleriantPool` as a singleton. Inject the interface into your services:
+
+```csharp
+public class OrderService(ICeleriantPool pool)
+{
+    private static readonly JsonEventSerializer Serializer = JsonEventSerializer.Default;
+
+    public async Task PlaceOrder(Guid orderId, decimal total, string customer)
+    {
+        var key = new AggregateKey(orgId, orderTypeId, orderId);
+        await pool.WriteAsync(key, [
+            AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, total, customer), Serializer)
+        ]);
+    }
+}
+```
+
+## TLS and mTLS
+
+For mTLS with PEM files:
+
+```csharp
+var tls = ClientTlsConfig.WithClientCertificateFromPem("localhost", "client.crt", "client.key");
+await using var client = await CeleriantClient.ConnectTlsAsync("localhost:10010", tls);
+```
+
+Server-only TLS (no client cert):
+
+```csharp
+var tls = ClientTlsConfig.Create("localhost");
+```
+
+The pool accepts TLS config via `CeleriantPoolOptions.TlsConfig`. Watch connections can also use their own TLS config via `WatchOptions.TlsConfig`.
+
+## Client identity
+
+When the server has `require_client_identity` enabled, the first message on a connection must be an Identify request. Three factory methods, all sent via the same Identify message:
+
+### API key
+
+Server stores four key slots (two ReadWrite, two ReadOnly) as SHA-256 hashes. The client sends the raw key in the Identify message; the server hashes and compares.
+
+```csharp
+var identity = ClientIdentityConfig.FromApiKey("base64-encoded-32-byte-key");
+```
+
+### Client ID (Guid)
+
+Convenience for when you want to use a `Guid` as your identity. Converted to a base64-encoded key for the wire protocol. Useful when storing client IDs as UUID columns in PostgreSQL alongside event offsets.
+
+```csharp
+var identity = ClientIdentityConfig.FromClientId(myServiceGuid);
+```
+
+### RSA key pair
+
+Generate an RSA-2048 keypair (DER-encoded, base64). Client identity is derived deterministically from the public key: `SHA-256(DER bytes)[0..16]` as a Guid (little-endian u128). Same keypair, same identity, on any server.
+
+```csharp
+// Generate once, persist the keypair
+using var rsa = RSA.Create(2048);
+var publicKeyBase64 = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo());
+var privateKeyBase64 = Convert.ToBase64String(rsa.ExportPkcs8PrivateKey());
+
+var identity = ClientIdentityConfig.FromRsaKeyPair(publicKeyBase64, privateKeyBase64);
+
+// Derive the client ID (Guid) from the public key if you need it
+var clientId = CeleriantCrypto.GenerateClientIdentity(publicKeyBase64);
+```
+
+When the connection identifies, the client library generates a nonce (current epoch milliseconds), signs it with the private key (RSASSA-PKCS1-v1_5 SHA-256), and sends the public key, nonce, and signature. The server validates the signature and checks the nonce (2-minute expiry, 60-second clock skew tolerance). All automatic.
+
+### Using identity
+
+```csharp
+// Direct connection
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
+await client.IdentifyAsync(identity);
+
+// Or via pool (identifies automatically on each new connection)
+await using var pool = new CeleriantPool(new CeleriantPoolOptions
+{
+    Address = "localhost:10000",
+    IdentityConfig = identity,
+});
+```
+
+Access levels are connection-scoped. ReadOnly blocks write/delete/trim/schema operations. The pool handles identity automatically on every new connection it creates.
+
 ## Serialization
 
 Your events are domain objects — records, classes, whatever. You don't hand-serialize them to `byte[]`. The client has a built-in serialization layer that handles this.
@@ -93,6 +234,21 @@ new AggregateEvent
 }
 ```
 
+## Client ID
+
+Every write carries a `ClientId` (Guid, mapped to u128 on the wire) that identifies the writing service. Celeriant uses it for exactly-once tracking: the highest `ClientEventIndex` is tracked per `(AggregateKey, ClientId)`.
+
+When client identity is enabled on the server, the write `ClientId` must match the identity derived from your Identify handshake. The server enforces this on every write, delete, trim, and schema request. A mismatch is rejected. So your RSA-derived identity or API key identity IS your write ClientId. See the [RSA key pair](#rsa-key-pair) section for how to derive it with `CeleriantCrypto.GenerateClientIdentity`.
+
+When identity is not enabled, `ClientId` is self-declared. Use a stable Guid for your service:
+
+```csharp
+// All instances of OrderService share this Guid
+private static readonly Guid MyClientId = Guid.Parse("...");
+```
+
+All instances of the same service should share a `ClientId`. Different services writing to the same aggregates should use different IDs.
+
 ## Writing events
 
 The simplest write pushes events into a single aggregate:
@@ -106,8 +262,6 @@ await client.WriteAsync(key, [
 ```
 
 `EventTypeMajor` and `EventTypeMinor` identify the event's schema version. Use major for breaking changes, minor for backwards-compatible additions. These tie into the schema registry (more on that below).
-
-`ClientEventIndex` is your client-side sequence number. Combined with `enforceClientIdempotency`, it gives you exactly-once write guarantees — if a write is retried due to a network failure, No chance duplicate events, they get rejected on write.
 
 ### Optimistic concurrency control
 
@@ -133,7 +287,17 @@ catch (WriteOccException ex)
 }
 ```
 
-There is no automatic retry on OCC failures. That's by design — only your domain logic knows whether a retry is safe. Catch up to the tip of the aggregate event stream, and try your write again.
+There is no automatic retry on OCC failures. That's by design — only your domain logic knows whether a retry is safe. Catch up to the tip of the aggregate event stream, re-validate your business rules, and try again.
+
+### Exactly-once writes
+
+Set `EnforceClientIdempotency = true` and provide a `ClientEventIndex` on each event. Celeriant tracks the highest `ClientEventIndex` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with a `ClientIdempotencyViolation` instead of writing it twice.
+
+The retry behaviour depends on why the write failed:
+
+- **OCC failure**: re-derive `ClientEventIndex` from fresh state (the aggregate moved, your index assumption was wrong)
+- **Timeout**: hold `ClientEventIndex` constant (the write may have already landed, changing the index would bypass the dedup check)
+- **Idempotency violation**: the prior attempt already landed. Treat as success.
 
 ### Dynamic consistency boundaries
 
@@ -374,92 +538,6 @@ var options = new ListOptions { IncludeDeleted = true };
 await foreach (var agg in pool.ListAggregatesAsync(options: options))
     // ...
 ```
-
-## Connections and the pool
-
-### Connections are cheap
-
-Celeriant connections are plain TCP sockets. Not like PostgreSQL where each connection spawns a server process. There's no session state, no connection overhead worth worrying about. Connect, send requests, dispose.
-
-```csharp
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
-```
-
-A single connection is fine for simple use cases, scripts, or admin tools. The client reuses the TCP connection across multiple requests.
-
-### The pool
-
-For production workloads, `CeleriantPool` is what you want. It manages a set of connections and routes operations to the right node:
-
-- **Writes** always go to the leader. If the leader moves (failover), the pool detects this and reroutes automatically.
-- **Reads** are distributed across all nodes via round-robin. Set `RouteReadsToFollowers = true` if you want to keep the leader free for writes.
-
-```csharp
-await using var pool = new CeleriantPool(new CeleriantPoolOptions
-{
-    Address = "localhost:10000",
-    MaxConnections = 20,
-    RouteReadsToFollowers = true,
-});
-```
-
-The pool is fully thread-safe. Share a single instance across your application. It handles connection lifecycle, failover, and node discovery.
-
-Key pool options:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `MaxConnections` | 10 | Connection pool ceiling |
-| `ConnectionTimeout` | 5s | TCP connect timeout |
-| `RequestTimeout` | 30s | Per-request timeout |
-| `IdleTimeout` | 25s | Close idle connections (must be below server's `slow_client_timeout`) |
-| `RouteReadsToFollowers` | false | Keep the leader free for writes |
-| `CompressionAlgorithm` | Zstd | Auto-compress large payloads |
-| `AutoCompressionThresholdBytes` | 1024 | Minimum payload size before compression kicks in |
-
-### DI registration
-
-```csharp
-builder.Services.AddCeleriantPool(options =>
-{
-    options.Address = "localhost:10000";
-    options.MaxConnections = 20;
-});
-```
-
-This registers `ICeleriantPool` as a singleton. Inject the interface into your services:
-
-```csharp
-public class OrderService(ICeleriantPool pool)
-{
-    private static readonly JsonEventSerializer Serializer = JsonEventSerializer.Default;
-
-    public async Task PlaceOrder(Guid orderId, decimal total, string customer)
-    {
-        var key = new AggregateKey(orgId, orderTypeId, orderId);
-        await pool.WriteAsync(key, [
-            AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, total, customer), Serializer)
-        ]);
-    }
-}
-```
-
-## TLS and mTLS
-
-For mTLS with PEM files:
-
-```csharp
-var tls = ClientTlsConfig.WithClientCertificateFromPem("localhost", "client.crt", "client.key");
-await using var client = await CeleriantClient.ConnectTlsAsync("localhost:10010", tls);
-```
-
-Server-only TLS (no client cert):
-
-```csharp
-var tls = ClientTlsConfig.Create("localhost");
-```
-
-The pool accepts TLS config via `CeleriantPoolOptions.TlsConfig`. Watch connections can also use their own TLS config via `WatchOptions.TlsConfig`.
 
 ## Compression
 

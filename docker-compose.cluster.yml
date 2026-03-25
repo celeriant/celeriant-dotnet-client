@@ -30,7 +30,7 @@ services:
 
   # Node 1 — exposed on host port 10000
   celeriant-node-1:
-    image: celeriant-server:latest
+    image: ghcr.io/celeriant/celeriant:latest
     depends_on:
       minio-setup:
         condition: service_completed_successfully
@@ -77,7 +77,7 @@ services:
 
   # Node 2 — exposed on host port 10002 (container still listens on 10000)
   celeriant-node-2:
-    image: celeriant-server:latest
+    image: ghcr.io/celeriant/celeriant:latest
     depends_on:
       minio-setup:
         condition: service_completed_successfully

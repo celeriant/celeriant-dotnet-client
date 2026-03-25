@@ -22,8 +22,14 @@ dotnet add package Celeriant.Client
 
 ### 1. Start the server
 
+Celeriant uses io_uring, so the container needs `seccomp=unconfined`.
+
 ```bash
-docker compose up -d
+docker run -d --name celeriant \
+  --security-opt seccomp=unconfined \
+  -p 10000:10000 \
+  ghcr.io/celeriant/celeriant \
+  --standalone --data-root /var/lib/celeriant --num-shards 1
 ```
 
 ### 2. Connect and write an event

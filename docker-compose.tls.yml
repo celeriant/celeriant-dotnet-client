@@ -3,7 +3,7 @@ services:
   # Run `test-certs/generate.sh` before starting this compose.
   # Port 10010 avoids conflict with the standalone server on 10000.
   celeriant-tls:
-    image: celeriant-server:latest
+    image: ghcr.io/celeriant/celeriant:latest
     security_opt:
       - seccomp=unconfined
     ulimits:

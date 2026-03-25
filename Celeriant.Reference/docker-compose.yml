@@ -1,6 +1,6 @@
 services:
   celeriant-server:
-    image: celeriant-server:latest
+    image: ghcr.io/celeriant/celeriant:latest
     ports:
       - "10000:10000"
     security_opt:

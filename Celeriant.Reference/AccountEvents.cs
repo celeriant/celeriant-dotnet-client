@@ -19,7 +19,7 @@ public static class Constants
 
     /// <summary>
     /// Single service-owned ClientId. All API instances share this identity.
-    /// ClientEventIndex is per (AggregateKey, ClientId) — OCC serialises concurrent writes.
+    /// ClientSeq is per (AggregateKey, ClientId) — OCC serialises concurrent writes.
     /// </summary>
     public static readonly Guid ServiceClientId = DeterministicGuid("ReferenceApiService");
 

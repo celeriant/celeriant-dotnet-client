@@ -37,11 +37,11 @@ public sealed class StandaloneTests
     private static AggregateKey NewKey(Guid orgId, Guid aggregateTypeId) =>
         new(orgId, aggregateTypeId, Guid.NewGuid());
 
-    private static AggregateEvent MakeEvent(long clientEventIndex = 1, string payload = "test") =>
+    private static AggregateEvent MakeEvent(long clientSeq = 1, string payload = "test") =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,
@@ -60,7 +60,7 @@ public sealed class StandaloneTests
                 [key] = new SingleAggregateWrite
                 {
                     AllowCreate = allowCreate,
-                    ExpectedEventBatchIndex = expectedBatchIndex,
+                    ExpectedVersion = expectedBatchIndex,
                     EnforceClientIdempotency = enforceIdempotency,
                     Events = events,
                 }
@@ -122,7 +122,7 @@ public sealed class StandaloneTests
         var detResp = await Client.SendRequestAsync(
             new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = key }));
         var det = Assert.IsType<ClientResponse.AggregateDetails>(detResp);
-        Assert.Equal(1L, det.Value.MaxEventBatchIndex);
+        Assert.Equal(1L, det.Value.MaxAggregateVersion);
         Assert.False(det.Value.IsDeleted);
     }
 
@@ -146,7 +146,7 @@ public sealed class StandaloneTests
 
         // Write with correct expected batch index
         var r2 = await WriteAsync(key, [MakeEvent(2, "second")],
-            allowCreate: false, expectedBatchIndex: det.Value.MaxEventBatchIndex);
+            allowCreate: false, expectedBatchIndex: det.Value.MaxAggregateVersion);
         Assert.IsType<ClientResponse.Write>(r2);
     }
 
@@ -214,13 +214,13 @@ public sealed class StandaloneTests
         var detResp = await Client.SendRequestAsync(
             new ClientRequest.AggregateDetails(new AggregateDetailsRequest { AggregateKey = key }));
         var det = Assert.IsType<ClientResponse.AggregateDetails>(detResp);
-        var maxBatch = det.Value.MaxEventBatchIndex;
+        var maxBatch = det.Value.MaxAggregateVersion;
 
         // Trim: keep from maxBatch onwards (throws on error)
         var trimResp = await Client.SendRequestAsync(new ClientRequest.TrimStart(new TrimStartRequest
         {
             AggregateKey = key,
-            KeepFromEventBatchIndex = maxBatch,
+            KeepFromAggregateVersion = maxBatch,
             ClientId = Guid.NewGuid(),
         }));
         Assert.IsType<ClientResponse.TrimStart>(trimResp);
@@ -268,7 +268,7 @@ public sealed class StandaloneTests
                 [key] = new SingleAggregateDelete
                 {
                     AllowRecreate = false,
-                    ExpectedEventBatchIndex = det.Value.MaxEventBatchIndex,
+                    ExpectedVersion = det.Value.MaxAggregateVersion,
                 }
             }
         }));
@@ -352,7 +352,7 @@ public sealed class StandaloneTests
                 [key1] = new SingleAggregateDelete
                 {
                     AllowRecreate = false,
-                    ExpectedEventBatchIndex = det.Value.MaxEventBatchIndex,
+                    ExpectedVersion = det.Value.MaxAggregateVersion,
                 }
             }
         }));

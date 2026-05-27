@@ -15,7 +15,7 @@ Open http://localhost:5000.
 ## What it demonstrates
 
 - Writing events with `CeleriantPool` and `JsonEventSerializer`
-- Optimistic concurrency control (`expectedEventBatchIndex`)
+- Optimistic concurrency control (`expectedVersion`)
 - Atomic multi-aggregate writes (transfers across two accounts)
 - Watch API with SSE broadcast to the browser
 - DI registration via `AddCeleriantPool()`

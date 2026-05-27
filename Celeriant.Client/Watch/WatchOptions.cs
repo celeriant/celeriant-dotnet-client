@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Celeriant.Client.Protocol;
 
 namespace Celeriant.Client.Watch;
 
@@ -8,9 +7,6 @@ namespace Celeriant.Client.Watch;
 /// </summary>
 public sealed class WatchOptions
 {
-    /// <summary>Compression type to request for watch responses. Defaults to <see cref="CompressionType.None"/>.</summary>
-    public CompressionType Compression { get; init; } = CompressionType.None;
-
     /// <summary>The shard index at which to start for multi-shard watch. Defaults to 0.</summary>
     [EditorBrowsable(EditorBrowsableState.Advanced)]
     public long StartShard { get; init; }

@@ -1,13 +1,16 @@
 using System.Text;
-using Celeriant.Client.Protocol;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 
 namespace Celeriant.Client.IntegrationTests;
 
 /// <summary>
-/// End-to-end compression tests through the actual server.
-/// Unit tests verify the codec in isolation; these verify the full wire round-trip.
+/// End-to-end write/read round-trips through the actual server.
+///
+/// Wire compression is now automatic and dictionary-based: the client only compresses when the
+/// cluster shipped a dictionary during Identify and the payload clears the size threshold, and the
+/// server transparently decompresses. These tests connect without identity (so frames are sent
+/// uncompressed) and verify the payload survives the round-trip regardless.
 /// </summary>
 [Collection("Server")]
 public sealed class CompressionIntegrationTests
@@ -25,19 +28,14 @@ public sealed class CompressionIntegrationTests
         }
     }
 
-    [SkippableTheory]
-    [InlineData(CompressionType.Zstd)]
-    [InlineData(CompressionType.Snappy)]
-    [InlineData(CompressionType.Brotli)]
-    [InlineData(CompressionType.Gzip)]
-    public async Task WriteWithCompression_ReadBack_PayloadPreserved(CompressionType compression)
+    [SkippableFact]
+    public async Task SmallPayload_Write_ReadBack_Preserved()
     {
         var key = TestHelpers.NewKey();
-        var payload = Encoding.UTF8.GetBytes($"compression-test-{compression}-payload");
+        var payload = Encoding.UTF8.GetBytes("compression-roundtrip-payload");
 
         var writeResp = await Client.SendRequestAsync(
-            new ClientRequest.Write(TestHelpers.SingleEventWrite(key, payload)),
-            compression);
+            new ClientRequest.Write(TestHelpers.SingleEventWrite(key, payload)));
         Assert.IsType<ClientResponse.Write>(writeResp);
 
         var readResp = await Client.SendRequestAsync(
@@ -48,21 +46,16 @@ public sealed class CompressionIntegrationTests
         Assert.Equal(payload, events[0].EventValue);
     }
 
-    [SkippableTheory]
-    [InlineData(CompressionType.Zstd)]
-    [InlineData(CompressionType.Snappy)]
-    [InlineData(CompressionType.Brotli)]
-    [InlineData(CompressionType.Gzip)]
-    public async Task LargePayload_CompressedWrite_ReadBack(CompressionType compression)
+    [SkippableFact]
+    public async Task LargePayload_Write_ReadBack_Preserved()
     {
         var key = TestHelpers.NewKey();
-        // 10KB payload — large enough that compression is meaningful
+        // 10KB payload — large enough to exercise the compression threshold when a dict is present.
         var payload = new byte[10_000];
         new Random(42).NextBytes(payload);
 
         var writeResp = await Client.SendRequestAsync(
-            new ClientRequest.Write(TestHelpers.SingleEventWrite(key, payload)),
-            compression);
+            new ClientRequest.Write(TestHelpers.SingleEventWrite(key, payload)));
         Assert.IsType<ClientResponse.Write>(writeResp);
 
         var readResp = await Client.SendRequestAsync(

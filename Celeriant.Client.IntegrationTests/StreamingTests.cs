@@ -152,7 +152,7 @@ public sealed class StreamingTests
         {
             var payload = Encoding.UTF8.GetBytes($"pool-stream-{i}");
             await pool.WriteAsync(TestHelpers.SingleEventWrite(key, payload,
-                clientEventIndex: i, allowCreate: i == 1));
+                clientSeq: i, allowCreate: i == 1));
         }
 
         var events = new List<AggregateEvent>();
@@ -187,7 +187,7 @@ public sealed class StreamingTests
         Assert.Equal(typeId, agg.AggregateTypeId);
         Assert.False(agg.IsDeleted);
         Assert.True(agg.EventBatchCount >= 2);
-        Assert.True(agg.MaxEventBatchIndex >= 2);
+        Assert.True(agg.MaxAggregateVersion >= 2);
         Assert.True(agg.CompressedSize > 0);
         Assert.True(agg.UncompressedSize > 0);
         Assert.NotNull(agg.MaxServerTimestamp);
@@ -197,22 +197,22 @@ public sealed class StreamingTests
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static AggregateEvent MakeEvent(long clientEventIndex, string payload) =>
+    private static AggregateEvent MakeEvent(long clientSeq, string payload) =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,
             EventValue = Encoding.UTF8.GetBytes(payload),
         };
 
-    private static AggregateEvent MakeEvent(long clientEventIndex, byte[] payload) =>
+    private static AggregateEvent MakeEvent(long clientSeq, byte[] payload) =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,

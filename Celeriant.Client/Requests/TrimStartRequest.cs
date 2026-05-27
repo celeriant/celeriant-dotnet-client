@@ -16,7 +16,7 @@ public sealed class TrimStartRequest
 
     [Key(2)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long KeepFromEventBatchIndex { get; init; }
+    public long KeepFromAggregateVersion { get; init; }
 
     [Key(3)]
     [MessagePackFormatter(typeof(CeleriantGuidFormatter))]

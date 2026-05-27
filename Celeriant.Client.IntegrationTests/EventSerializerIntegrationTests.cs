@@ -178,8 +178,8 @@ public sealed class EventSerializerIntegrationTests
                     AllowCreate = true,
                     Events =
                     [
-                        AggregateEventExtensions.Create(eventTypeMajor: 1, order, defaultJson, clientEventIndex: 1),
-                        AggregateEventExtensions.Create(eventTypeMajor: 2, shipment, camelJson, clientEventIndex: 2),
+                        AggregateEventExtensions.Create(eventTypeMajor: 1, order, defaultJson, clientSeq: 1),
+                        AggregateEventExtensions.Create(eventTypeMajor: 2, shipment, camelJson, clientSeq: 2),
                     ],
                 }
             }

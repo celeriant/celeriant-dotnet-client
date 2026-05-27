@@ -59,7 +59,7 @@ public sealed class PoolTests
 
         var details = await pool.AggregateDetailsAsync(
             TestHelpers.DetailsRequest(key));
-        Assert.Equal(1L, details.MaxEventBatchIndex);
+        Assert.Equal(1L, details.MaxAggregateVersion);
         Assert.False(details.IsDeleted);
     }
 
@@ -81,7 +81,7 @@ public sealed class PoolTests
                 [key] = new SingleAggregateDelete
                 {
                     AllowRecreate = false,
-                    ExpectedEventBatchIndex = details.MaxEventBatchIndex,
+                    ExpectedVersion = details.MaxAggregateVersion,
                 }
             }
         });
@@ -106,21 +106,21 @@ public sealed class PoolTests
 
         var key = TestHelpers.NewKey();
         await pool.WriteAsync(TestHelpers.SingleEventWrite(key, "batch-1"u8.ToArray()));
-        await pool.WriteAsync(TestHelpers.SingleEventWrite(key, "batch-2"u8.ToArray(), clientEventIndex: 2, allowCreate: false));
+        await pool.WriteAsync(TestHelpers.SingleEventWrite(key, "batch-2"u8.ToArray(), clientSeq: 2, allowCreate: false));
 
         var details = await pool.AggregateDetailsAsync(TestHelpers.DetailsRequest(key));
 
         await pool.TrimStartAsync(new TrimStartRequest
         {
             AggregateKey = key,
-            KeepFromEventBatchIndex = details.MaxEventBatchIndex,
+            KeepFromAggregateVersion = details.MaxAggregateVersion,
             ClientId = Guid.NewGuid(),
         });
 
         var read = await pool.ReadAsync(new ReadRequest
         {
             AggregateKey = key,
-            Filters = ReadFilters.From(details.MaxEventBatchIndex),
+            Filters = ReadFilters.From(details.MaxAggregateVersion),
         });
         var payloads = read.EventBatches
             .SelectMany(b => b.Events)
@@ -222,18 +222,19 @@ public sealed class PoolTests
     }
 
     [SkippableFact]
-    public async Task WriteWithAutoCompression_ViaPool()
+    public async Task WriteAndReadBack_ViaPool_LargePayload()
     {
-        // Pool with threshold=0 so all variable-size writes are compressed
+        // Compression is automatic and dictionary-based; without identity no dictionary is
+        // negotiated, so this exercises the pool write/read round-trip with a large payload.
         await using var pool = new CeleriantPool(new CeleriantPoolOptions
         {
             Address = Address,
             MaxConnections = 3,
-            AutoCompressionThresholdBytes = 0,
         });
 
         var key = TestHelpers.NewKey();
-        var payload = Encoding.UTF8.GetBytes("pool-compressed-write");
+        var payload = new byte[10_000];
+        new Random(42).NextBytes(payload);
 
         await pool.WriteAsync(TestHelpers.SingleEventWrite(key, payload));
 
@@ -244,14 +245,12 @@ public sealed class PoolTests
     }
 
     [SkippableFact]
-    public async Task WriteWithAutoCompression_SmallPayloadNotCompressed()
+    public async Task WriteAndReadBack_ViaPool_SmallPayload()
     {
-        // Pool with high threshold — small writes skip compression
         await using var pool = new CeleriantPool(new CeleriantPoolOptions
         {
             Address = Address,
             MaxConnections = 3,
-            AutoCompressionThresholdBytes = 100_000,
         });
 
         var key = TestHelpers.NewKey();

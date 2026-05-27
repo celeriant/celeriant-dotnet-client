@@ -37,16 +37,16 @@ public sealed class AggregateStats
     public DateTimeOffset? MaxServerTimestamp { get; internal set; }
 
     /// <summary>Minimum event batch index across shards. 0 means no data.</summary>
-    public long MinEventBatchIndex { get; internal set; }
+    public long MinAggregateVersion { get; internal set; }
 
     /// <summary>Maximum event batch index across shards.</summary>
-    public long MaxEventBatchIndex { get; internal set; }
+    public long MaxAggregateVersion { get; internal set; }
 
     /// <summary>Minimum event index across shards. 0 means no data.</summary>
-    public long MinEventIndex { get; internal set; }
+    public long MinEventSeq { get; internal set; }
 
     /// <summary>Maximum event index across shards.</summary>
-    public long MaxEventIndex { get; internal set; }
+    public long MaxEventSeq { get; internal set; }
 
     /// <summary>Total compressed size in bytes across all shards.</summary>
     public long CompressedSize { get; internal set; }

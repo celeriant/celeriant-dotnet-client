@@ -1,4 +1,3 @@
-using Celeriant.Client.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Celeriant.Client;
@@ -82,12 +81,6 @@ public sealed class CeleriantPoolOptionsBuilder
     /// <summary>When true, route reads only to followers. Default: false.</summary>
     public bool RouteReadsToFollowers { get; set; }
 
-    /// <summary>Compression algorithm for variable-size requests. Default: Zstd.</summary>
-    public CompressionType CompressionAlgorithm { get; set; } = CompressionType.Zstd;
-
-    /// <summary>Minimum payload size (bytes) before auto-compression kicks in. Default: 1024.</summary>
-    public int AutoCompressionThresholdBytes { get; set; } = 1024;
-
     /// <summary>Build the immutable <see cref="CeleriantPoolOptions"/>.</summary>
     public CeleriantPoolOptions Build()
     {
@@ -108,8 +101,6 @@ public sealed class CeleriantPoolOptionsBuilder
             MaxRequestSize = MaxRequestSize,
             MaxResponseSize = MaxResponseSize,
             IdleTimeout = IdleTimeout,
-            CompressionAlgorithm = CompressionAlgorithm,
-            AutoCompressionThresholdBytes = AutoCompressionThresholdBytes,
         };
     }
 }

@@ -11,7 +11,7 @@ public interface ICeleriantClient : IAsyncDisposable
 {
     /// <summary>Send a read request and return the typed response.</summary>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist.</exception>
-    /// <exception cref="Errors.BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="Errors.BatchIndexUnavailableException.MinimumAvailableBatchIndex"/>.</exception>
+    /// <exception cref="Errors.BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="Errors.BatchIndexUnavailableException.MinimumAvailableVersion"/>.</exception>
     /// <exception cref="Errors.ConnectionFailedException">The connection was lost.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
     Task<ReadResponse> ReadAsync(ReadRequest request, CancellationToken ct = default);
@@ -42,7 +42,7 @@ public interface ICeleriantClient : IAsyncDisposable
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
-        long? expectedEventBatchIndex = null,
+        long? expectedVersion = null,
         bool enforceClientIdempotency = false,
         CancellationToken ct = default);
 

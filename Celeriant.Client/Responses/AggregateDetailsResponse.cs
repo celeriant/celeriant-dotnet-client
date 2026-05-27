@@ -13,15 +13,15 @@ public sealed class AggregateDetailsResponse
 
     [Key(1)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MinEventBatchIndex { get; init; }
+    public long MinAggregateVersion { get; init; }
 
     [Key(2)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MaxEventBatchIndex { get; init; }
+    public long MaxAggregateVersion { get; init; }
 
     [Key(3)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MaxEventIndex { get; init; }
+    public long MaxEventSeq { get; init; }
 
     [Key(4)]
     public bool IsDeleted { get; init; }
@@ -30,7 +30,7 @@ public sealed class AggregateDetailsResponse
     public bool AllowRecreate { get; init; }
 
     [Key(6)]
-    public bool AllowIndexContinuation { get; init; }
+    public bool AllowSequenceContinuation { get; init; }
 
     [Key(7)]
     [MessagePackFormatter(typeof(EpochMillisFormatter))]

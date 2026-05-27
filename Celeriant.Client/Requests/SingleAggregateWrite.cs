@@ -19,20 +19,8 @@ public sealed class SingleAggregateWrite
 
     [Key(2)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? ExpectedEventBatchIndex { get; init; }
+    public long? ExpectedVersion { get; init; }
 
     [Key(3)]
     public bool EnforceClientIdempotency { get; init; }
-
-    /// <summary>
-    /// Compression algorithm applied to events in this write.
-    /// </summary>
-    [Key(4)]
-    public CompressionType Compression { get; init; }
-
-    /// <summary>
-    /// Compression level, or null for algorithms that don't use one (None, Snappy).
-    /// </summary>
-    [Key(5)]
-    public int? CompressionLevel { get; init; }
 }

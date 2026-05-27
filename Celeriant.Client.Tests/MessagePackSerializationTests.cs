@@ -47,15 +47,15 @@ public class MessagePackSerializationTests
         {
             CorrelationId = CorrelationId,
             AggregateKey  = MakeKey(),
-            Filters       = new ReadFilters { FromEventBatchIndex = 5, ToEventBatchIndex = 100 },
+            Filters       = new ReadFilters { FromAggregateVersion = 5, ToAggregateVersion = 100 },
         };
 
         var result = RoundTrip(req);
 
         Assert.Equal(CorrelationId, result.CorrelationId);
         Assert.Equal(OrgId, result.AggregateKey.OrgId);
-        Assert.Equal(5L, result.Filters.FromEventBatchIndex);
-        Assert.Equal(100L, result.Filters.ToEventBatchIndex);
+        Assert.Equal(5L, result.Filters.FromAggregateVersion);
+        Assert.Equal(100L, result.Filters.ToAggregateVersion);
     }
 
     [Fact]
@@ -81,8 +81,8 @@ public class MessagePackSerializationTests
     {
         var filters = new ReadFilters
         {
-            FromEventBatchIndex = 10,
-            ToEventBatchIndex   = 50,
+            FromAggregateVersion = 10,
+            ToAggregateVersion   = 50,
             IncludeEventTypes   = [1L, 2L, 3L],
             ExcludeClientId     = ClientId,
             IncludeClientId     = null,
@@ -90,28 +90,28 @@ public class MessagePackSerializationTests
             IncludeUserId       = null,
             MinServerTimestamp  = DateTimeOffset.FromUnixTimeMilliseconds(1000),
             MaxServerTimestamp  = DateTimeOffset.FromUnixTimeMilliseconds(9999),
-            MinClientEventIndex = 0L,
-            MaxClientEventIndex = 100L,
+            MinClientSeq = 0L,
+            MaxClientSeq = 100L,
             MinEventTimestamp   = DateTimeOffset.FromUnixTimeMilliseconds(500),
             MaxEventTimestamp   = DateTimeOffset.FromUnixTimeMilliseconds(800),
-            MinEventIndex       = 1L,
-            MaxEventIndex       = 99L,
+            MinEventSeq       = 1L,
+            MaxEventSeq       = 99L,
         };
 
         var result = RoundTrip(filters);
 
-        Assert.Equal(10L, result.FromEventBatchIndex);
-        Assert.Equal(50L, result.ToEventBatchIndex);
+        Assert.Equal(10L, result.FromAggregateVersion);
+        Assert.Equal(50L, result.ToAggregateVersion);
         Assert.Equal(new long[] { 1L, 2L, 3L }, result.IncludeEventTypes);
         Assert.Equal(ClientId, result.ExcludeClientId);
         Assert.Null(result.IncludeClientId);
         Assert.Equal(UserId, result.ExcludeUserId);
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1000), result.MinServerTimestamp);
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(9999), result.MaxServerTimestamp);
-        Assert.Equal(0L, result.MinClientEventIndex);
-        Assert.Equal(100L, result.MaxClientEventIndex);
-        Assert.Equal(1L, result.MinEventIndex);
-        Assert.Equal(99L, result.MaxEventIndex);
+        Assert.Equal(0L, result.MinClientSeq);
+        Assert.Equal(100L, result.MaxClientSeq);
+        Assert.Equal(1L, result.MinEventSeq);
+        Assert.Equal(99L, result.MaxEventSeq);
     }
 
     [Fact]
@@ -120,8 +120,8 @@ public class MessagePackSerializationTests
         var filters = ReadFilters.From(1);
         var result = RoundTrip(filters);
 
-        Assert.Equal(1L, result.FromEventBatchIndex);
-        Assert.Null(result.ToEventBatchIndex);
+        Assert.Equal(1L, result.FromAggregateVersion);
+        Assert.Null(result.ToAggregateVersion);
         Assert.Null(result.IncludeEventTypes);
         Assert.Null(result.ExcludeClientId);
         Assert.Null(result.IncludeClientId);
@@ -129,8 +129,8 @@ public class MessagePackSerializationTests
         Assert.Null(result.IncludeUserId);
         Assert.Null(result.MinServerTimestamp);
         Assert.Null(result.MaxServerTimestamp);
-        Assert.Null(result.MinEventIndex);
-        Assert.Null(result.MaxEventIndex);
+        Assert.Null(result.MinEventSeq);
+        Assert.Null(result.MaxEventSeq);
     }
 
     // -----------------------------------------------------------------------
@@ -142,8 +142,8 @@ public class MessagePackSerializationTests
     {
         var ev = new AggregateEvent
         {
-            ClientEventIndex = 1,
-            EventIndex       = 1,
+            ClientSeq = 1,
+            EventSeq       = 1,
             EventTimestamp   = DateTimeOffset.FromUnixTimeMilliseconds(12345),
             EventTypeMajor   = 10,
             EventTypeMinor   = 0,
@@ -189,8 +189,8 @@ public class MessagePackSerializationTests
                 [MakeKey()] = new SingleAggregateDelete
                 {
                     AllowRecreate           = false,
-                    AllowIndexContinuation  = true,
-                    ExpectedEventBatchIndex = 42L,
+                    AllowSequenceContinuation  = true,
+                    ExpectedVersion = 42L,
                 }
             },
         };
@@ -202,8 +202,8 @@ public class MessagePackSerializationTests
         Assert.Single(result.Deletes);
         var del = result.Deletes.Values.First();
         Assert.False(del.AllowRecreate);
-        Assert.True(del.AllowIndexContinuation);
-        Assert.Equal(42L, del.ExpectedEventBatchIndex);
+        Assert.True(del.AllowSequenceContinuation);
+        Assert.Equal(42L, del.ExpectedVersion);
     }
 
     // -----------------------------------------------------------------------
@@ -217,7 +217,7 @@ public class MessagePackSerializationTests
         {
             CorrelationId           = CorrelationId,
             AggregateKey            = MakeKey(),
-            KeepFromEventBatchIndex = 10,
+            KeepFromAggregateVersion = 10,
             ClientId                = ClientId,
             UserId                  = null,
         };
@@ -226,7 +226,7 @@ public class MessagePackSerializationTests
 
         Assert.Equal(CorrelationId, result.CorrelationId);
         Assert.Equal(OrgId, result.AggregateKey.OrgId);
-        Assert.Equal(10L, result.KeepFromEventBatchIndex);
+        Assert.Equal(10L, result.KeepFromAggregateVersion);
         Assert.Equal(ClientId, result.ClientId);
         Assert.Null(result.UserId);
     }
@@ -388,8 +388,8 @@ public class MessagePackSerializationTests
         var eventId = Guid.Parse("77777777-7777-7777-7777-777777777777");
         var ev = new AggregateEvent
         {
-            ClientEventIndex = 5,
-            EventIndex       = 42,
+            ClientSeq = 5,
+            EventSeq       = 42,
             EventId          = eventId,
             EventTimestamp   = DateTimeOffset.FromUnixTimeMilliseconds(1700000000000),
             EventTypeMajor   = 3,
@@ -400,8 +400,8 @@ public class MessagePackSerializationTests
 
         var result = RoundTrip(ev);
 
-        Assert.Equal(5L, result.ClientEventIndex);
-        Assert.Equal(42L, result.EventIndex);
+        Assert.Equal(5L, result.ClientSeq);
+        Assert.Equal(42L, result.EventSeq);
         Assert.Equal(eventId, result.EventId);
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1700000000000), result.EventTimestamp);
         Assert.Equal(3L, result.EventTypeMajor);
@@ -415,8 +415,8 @@ public class MessagePackSerializationTests
     {
         var ev = new AggregateEvent
         {
-            ClientEventIndex = 1,
-            EventIndex       = 1,
+            ClientSeq = 1,
+            EventSeq       = 1,
             EventId          = null,
             EventTimestamp   = DateTimeOffset.UnixEpoch,
             EventTypeMajor   = 0,
@@ -441,7 +441,7 @@ public class MessagePackSerializationTests
     {
         var batch = new AggregateEventBatch
         {
-            EventBatchIndex = 7,
+            AggregateVersion = 7,
             ClientId        = ClientId,
             UserId          = UserId,
             ServerTimestamp = DateTimeOffset.FromUnixTimeMilliseconds(1700000001000),
@@ -449,8 +449,8 @@ public class MessagePackSerializationTests
             [
                 new AggregateEvent
                 {
-                    ClientEventIndex = 1,
-                    EventIndex       = 1,
+                    ClientSeq = 1,
+                    EventSeq       = 1,
                     EventTimestamp   = DateTimeOffset.FromUnixTimeMilliseconds(100),
                     EventTypeMajor   = 1,
                     EventTypeMinor   = 0,
@@ -461,7 +461,7 @@ public class MessagePackSerializationTests
 
         var result = RoundTrip(batch);
 
-        Assert.Equal(7L, result.EventBatchIndex);
+        Assert.Equal(7L, result.AggregateVersion);
         Assert.Equal(ClientId, result.ClientId);
         Assert.Equal(UserId, result.UserId);
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1700000001000), result.ServerTimestamp);
@@ -473,7 +473,7 @@ public class MessagePackSerializationTests
     {
         var batch = new AggregateEventBatch
         {
-            EventBatchIndex = 1,
+            AggregateVersion = 1,
             ClientId        = ClientId,
             UserId          = null,
             ServerTimestamp = DateTimeOffset.UnixEpoch,
@@ -501,21 +501,21 @@ public class MessagePackSerializationTests
             [
                 new AggregateEventBatch
                 {
-                    EventBatchIndex = 1,
+                    AggregateVersion = 1,
                     ClientId        = ClientId,
                     UserId          = null,
                     ServerTimestamp = DateTimeOffset.FromUnixTimeMilliseconds(100),
                     Events          = [],
                 }
             ],
-            NextEventBatchIndex = 2,
+            NextAggregateVersion = 2,
         };
 
         var result = RoundTrip(resp);
 
         Assert.Equal(CorrelationId, result.CorrelationId);
         Assert.Single(result.EventBatches);
-        Assert.Equal(2L, result.NextEventBatchIndex);
+        Assert.Equal(2L, result.NextAggregateVersion);
     }
 
     // -----------------------------------------------------------------------
@@ -569,12 +569,12 @@ public class MessagePackSerializationTests
         var resp = new AggregateDetailsResponse
         {
             CorrelationId           = CorrelationId,
-            MinEventBatchIndex      = 1,
-            MaxEventBatchIndex      = 100,
-            MaxEventIndex           = 500,
+            MinAggregateVersion      = 1,
+            MaxAggregateVersion      = 100,
+            MaxEventSeq           = 500,
             IsDeleted               = false,
             AllowRecreate           = true,
-            AllowIndexContinuation  = false,
+            AllowSequenceContinuation  = false,
             LastServerTimestamp     = DateTimeOffset.FromUnixTimeMilliseconds(9999),
             LastClientId            = ClientId,
             LastUserId              = UserId,
@@ -583,8 +583,8 @@ public class MessagePackSerializationTests
         var result = RoundTrip(resp);
 
         Assert.Equal(CorrelationId, result.CorrelationId);
-        Assert.Equal(1L, result.MinEventBatchIndex);
-        Assert.Equal(100L, result.MaxEventBatchIndex);
+        Assert.Equal(1L, result.MinAggregateVersion);
+        Assert.Equal(100L, result.MaxAggregateVersion);
         Assert.False(result.IsDeleted);
         Assert.True(result.AllowRecreate);
         Assert.Equal(ClientId, result.LastClientId);
@@ -629,9 +629,9 @@ public class MessagePackSerializationTests
                     AggregateTypeId         = AggTypeId,
                     AggregateId             = AggId,
                     Operation               = WatchOperationType.Write,
-                    FromEventBatchIndex     = 10,
-                    ToEventBatchIndex       = 20,
-                    KeepFromEventBatchIndex = null,
+                    FromAggregateVersion     = 10,
+                    ToAggregateVersion       = 20,
+                    KeepFromAggregateVersion = null,
                 }
             ]
         };
@@ -644,9 +644,9 @@ public class MessagePackSerializationTests
         Assert.Equal(AggTypeId, ev.AggregateTypeId);
         Assert.Equal(AggId, ev.AggregateId);
         Assert.Equal(WatchOperationType.Write, ev.Operation);
-        Assert.Equal(10L, ev.FromEventBatchIndex);
-        Assert.Equal(20L, ev.ToEventBatchIndex);
-        Assert.Null(ev.KeepFromEventBatchIndex);
+        Assert.Equal(10L, ev.FromAggregateVersion);
+        Assert.Equal(20L, ev.ToAggregateVersion);
+        Assert.Null(ev.KeepFromAggregateVersion);
     }
 
     // -----------------------------------------------------------------------

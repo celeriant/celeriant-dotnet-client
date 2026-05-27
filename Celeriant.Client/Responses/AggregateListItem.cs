@@ -36,19 +36,19 @@ public sealed class AggregateListItem
 
     [Key(7)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MinEventBatchIndex { get; init; }
+    public long MinAggregateVersion { get; init; }
 
     [Key(8)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MaxEventBatchIndex { get; init; }
+    public long MaxAggregateVersion { get; init; }
 
     [Key(9)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MinEventIndex { get; init; }
+    public long MinEventSeq { get; init; }
 
     [Key(10)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long MaxEventIndex { get; init; }
+    public long MaxEventSeq { get; init; }
 
     [Key(11)]
     [MessagePackFormatter(typeof(ZeroAsNullEpochMillisFormatter))]

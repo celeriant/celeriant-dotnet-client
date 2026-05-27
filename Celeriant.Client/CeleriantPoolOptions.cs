@@ -58,19 +58,4 @@ public sealed class CeleriantPoolOptions
     /// followers are available. Default: false (reads go to any node).
     /// </summary>
     public bool RouteReadsToFollowers { get; init; }
-
-    /// <summary>
-    /// Compression algorithm used for variable-size requests (writes, schema registration)
-    /// when the serialized payload exceeds <see cref="AutoCompressionThresholdBytes"/>.
-    /// Default: <see cref="CompressionType.Zstd"/>.
-    /// </summary>
-    public CompressionType CompressionAlgorithm { get; init; } = CompressionType.Zstd;
-
-    /// <summary>
-    /// Minimum serialized payload size (in bytes) before automatic wire compression is applied.
-    /// Only affects variable-size messages (writes, schema registration).
-    /// Set to 0 to always compress. Set to <see cref="int.MaxValue"/> to disable.
-    /// Default: 1024.
-    /// </summary>
-    public int AutoCompressionThresholdBytes { get; init; } = 1024;
 }

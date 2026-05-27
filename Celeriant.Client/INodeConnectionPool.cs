@@ -1,5 +1,3 @@
-using Celeriant.Client.Protocol;
-using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 
 namespace Celeriant.Client;
@@ -22,10 +20,9 @@ internal interface INodeConnectionPool : IAsyncDisposable
     /// <summary>
     /// Lease a connection, send a request, and return the connection to the pool.
     /// Marks the connection as broken on transport/protocol errors.
+    /// Compression is decided per-connection by the client from its negotiated dictionary.
     /// </summary>
     Task<ClientResponse> ExecuteRequestAsync(
         ClientRequest request,
-        CompressionType compression,
-        int compressionThreshold,
         CancellationToken ct);
 }

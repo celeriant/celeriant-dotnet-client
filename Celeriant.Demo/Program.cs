@@ -42,14 +42,14 @@ app.MapGet("/api/accounts", () => Results.Json(new
     clients = DemoConstants.Clients.Select(c => new { c.Id, c.Name }),
 }, jsonOptions));
 
-// GET /api/accounts/{accountId}/events?fromBatchIndex=1
+// GET /api/accounts/{accountId}/events?fromVersion=1
 app.MapGet("/api/accounts/{accountId}/events", async (
     Guid accountId,
-    long? fromBatchIndex,
+    long? fromVersion,
     ICeleriantPool pool) =>
 {
     var key = DemoConstants.AccountKey(accountId);
-    var filters = ReadFilters.From(fromBatchIndex ?? 1);
+    var filters = ReadFilters.From(fromVersion ?? 1);
 
     try
     {
@@ -61,7 +61,7 @@ app.MapGet("/api/accounts/{accountId}/events", async (
 
         var batches = response.EventBatches.Select(b => new
         {
-            batchIndex = b.EventBatchIndex,
+            version = b.AggregateVersion,
             clientId = b.ClientId,
             serverTimestamp = b.ServerTimestamp,
             events = b.Events.Select(e => DeserializeEvent(e)),
@@ -89,17 +89,17 @@ app.MapPost("/api/accounts/{accountId}/deposit", async (
         await pool.WriteAsync(key, [evt],
             clientId: req.ClientId,
             allowCreate: true,
-            expectedEventBatchIndex: req.ExpectedBatchIndex);
+            expectedVersion: req.ExpectedVersion);
 
         var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest { AggregateKey = key });
-        return Results.Json(new { newBatchIndex = details.MaxEventBatchIndex }, jsonOptions);
+        return Results.Json(new { newVersion = details.MaxAggregateVersion }, jsonOptions);
     }
     catch (WriteOccException ex)
     {
         return Results.Json(new
         {
             error = "OCC_CONFLICT",
-            currentBatchIndex = ex.CurrentBatchIndex,
+            currentVersion = ex.CurrentAggregateVersion,
             message = "Account was modified. Please refresh and retry.",
         }, jsonOptions, statusCode: 409);
     }
@@ -119,17 +119,17 @@ app.MapPost("/api/accounts/{accountId}/withdraw", async (
         await pool.WriteAsync(key, [evt],
             clientId: req.ClientId,
             allowCreate: true,
-            expectedEventBatchIndex: req.ExpectedBatchIndex);
+            expectedVersion: req.ExpectedVersion);
 
         var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest { AggregateKey = key });
-        return Results.Json(new { newBatchIndex = details.MaxEventBatchIndex }, jsonOptions);
+        return Results.Json(new { newVersion = details.MaxAggregateVersion }, jsonOptions);
     }
     catch (WriteOccException ex)
     {
         return Results.Json(new
         {
             error = "OCC_CONFLICT",
-            currentBatchIndex = ex.CurrentBatchIndex,
+            currentVersion = ex.CurrentAggregateVersion,
             message = "Account was modified. Please refresh and retry.",
         }, jsonOptions, statusCode: 409);
     }
@@ -155,13 +155,13 @@ app.MapPost("/api/transfers", async (TransferRequest req, ICeleriantPool pool) =
             {
                 Events = [transferOutEvt],
                 AllowCreate = true,
-                ExpectedEventBatchIndex = req.ExpectedFromBatchIndex,
+                ExpectedVersion = req.ExpectedFromVersion,
             },
             [toKey] = new SingleAggregateWrite
             {
                 Events = [transferInEvt],
                 AllowCreate = true,
-                ExpectedEventBatchIndex = req.ExpectedToBatchIndex,
+                ExpectedVersion = req.ExpectedToVersion,
             },
         },
     };
@@ -175,8 +175,8 @@ app.MapPost("/api/transfers", async (TransferRequest req, ICeleriantPool pool) =
 
         return Results.Json(new
         {
-            newFromBatchIndex = fromDetails.MaxEventBatchIndex,
-            newToBatchIndex = toDetails.MaxEventBatchIndex,
+            newFromVersion = fromDetails.MaxAggregateVersion,
+            newToVersion = toDetails.MaxAggregateVersion,
         }, jsonOptions);
     }
     catch (WriteOccException)
@@ -261,7 +261,7 @@ async Task SeedAccounts(ICeleriantPool pool)
         try
         {
             var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest { AggregateKey = key });
-            if (details.MaxEventBatchIndex > 0)
+            if (details.MaxAggregateVersion > 0)
                 continue; // Already has events
         }
         catch (AggregateNotFoundException)
@@ -280,19 +280,19 @@ async Task SeedAccounts(ICeleriantPool pool)
 
 // --- Request DTOs ---
 
-record DepositRequest(Guid ClientId, int AmountCents, long ExpectedBatchIndex);
-record WithdrawRequest(Guid ClientId, int AmountCents, long ExpectedBatchIndex);
+record DepositRequest(Guid ClientId, int AmountCents, long ExpectedVersion);
+record WithdrawRequest(Guid ClientId, int AmountCents, long ExpectedVersion);
 record TransferRequest(
     Guid ClientId,
     Guid FromAccountId,
     Guid ToAccountId,
     int AmountCents,
-    long ExpectedFromBatchIndex,
-    long ExpectedToBatchIndex);
+    long ExpectedFromVersion,
+    long ExpectedToVersion);
 
 // --- Watch broadcaster ---
 
-record WatchEvent(Guid AggregateId, string Operation, long? ToBatchIndex);
+record WatchEvent(Guid AggregateId, string Operation, long? ToVersion);
 
 sealed class WatchBroadcaster(IConfiguration config, ILogger<WatchBroadcaster> logger) : BackgroundService
 {
@@ -331,7 +331,7 @@ sealed class WatchBroadcaster(IConfiguration config, ILogger<WatchBroadcaster> l
                         var watchEvent = new WatchEvent(
                             evt.AggregateId,
                             evt.Operation.ToString(),
-                            evt.ToEventBatchIndex);
+                            evt.ToAggregateVersion);
 
                         foreach (var sub in _subscribers.Keys)
                         {

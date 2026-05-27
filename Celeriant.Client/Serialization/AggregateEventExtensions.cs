@@ -15,7 +15,7 @@ public static class AggregateEventExtensions
     /// <param name="eventTypeMajor">Major event type identifier (maps to a registered schema).</param>
     /// <param name="payload">The event payload object to serialize.</param>
     /// <param name="serializer">Serializer to encode the payload to bytes.</param>
-    /// <param name="clientEventIndex">Client-assigned index within the batch (starting at 1).</param>
+    /// <param name="clientSeq">Client-assigned index within the batch (starting at 1).</param>
     /// <param name="eventTypeMinor">Minor event type identifier. Defaults to 0.</param>
     /// <param name="eventId">Optional client-assigned event ID for deduplication.</param>
     /// <param name="timestamp">Event timestamp. Defaults to <see cref="DateTimeOffset.UtcNow"/>.</param>
@@ -23,14 +23,14 @@ public static class AggregateEventExtensions
         long eventTypeMajor,
         T payload,
         IEventSerializer serializer,
-        long clientEventIndex = 1,
+        long clientSeq = 1,
         long eventTypeMinor = 0,
         Guid? eventId = null,
         DateTimeOffset? timestamp = null)
         => new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = timestamp ?? DateTimeOffset.UtcNow,
             EventTypeMajor = eventTypeMajor,
             EventTypeMinor = eventTypeMinor,

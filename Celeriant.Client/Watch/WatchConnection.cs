@@ -224,7 +224,7 @@ public sealed class WatchConnection : IAsyncDisposable
         try
         {
             response = await client.SendRequestAsync(
-                new ClientRequest.Watch(probeRequest), _options.Compression, ct)
+                new ClientRequest.Watch(probeRequest), ct)
                 .ConfigureAwait(false);
         }
         catch (CeleriantErrorException ex) when (ex.Error.ErrorCode == ShardRoutingError)
@@ -268,7 +268,7 @@ public sealed class WatchConnection : IAsyncDisposable
         while (true)
         {
             ClientResponse response = await _singleClient!.SendRequestAsync(
-                new ClientRequest.Watch(_singleRequest!), _options.Compression, ct)
+                new ClientRequest.Watch(_singleRequest!), ct)
                 .ConfigureAwait(false);
 
             if (response is ClientResponse.Watch watchResponse)
@@ -365,7 +365,7 @@ public sealed class WatchConnection : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 ClientResponse response = await client.SendRequestAsync(
-                    new ClientRequest.Watch(request), _options.Compression, ct)
+                    new ClientRequest.Watch(request), ct)
                     .ConfigureAwait(false);
 
                 if (response is ClientResponse.Watch watchResponse)

@@ -1,5 +1,3 @@
-using Celeriant.Client.Protocol;
-
 namespace Celeriant.Client.Tests;
 
 public class OptionsBuilderTests
@@ -23,8 +21,6 @@ public class OptionsBuilderTests
         Assert.Equal(10_000_000L, builder.MaxRequestSize);
         Assert.Equal(TimeSpan.FromSeconds(25), builder.IdleTimeout);
         Assert.False(builder.RouteReadsToFollowers);
-        Assert.Equal(CompressionType.Zstd, builder.CompressionAlgorithm);
-        Assert.Equal(1024, builder.AutoCompressionThresholdBytes);
     }
 
     // -----------------------------------------------------------------------
@@ -71,8 +67,6 @@ public class OptionsBuilderTests
             MaxRequestSize = 50_000_000,
             IdleTimeout = TimeSpan.FromMinutes(10),
             RouteReadsToFollowers = true,
-            CompressionAlgorithm = CompressionType.Brotli,
-            AutoCompressionThresholdBytes = 4096,
         };
 
         var options = builder.Build();
@@ -85,8 +79,6 @@ public class OptionsBuilderTests
         Assert.Equal(50_000_000L, options.MaxRequestSize);
         Assert.Equal(TimeSpan.FromMinutes(10), options.IdleTimeout);
         Assert.True(options.RouteReadsToFollowers);
-        Assert.Equal(CompressionType.Brotli, options.CompressionAlgorithm);
-        Assert.Equal(4096, options.AutoCompressionThresholdBytes);
     }
 
     // -----------------------------------------------------------------------
@@ -104,7 +96,5 @@ public class OptionsBuilderTests
         Assert.Equal(10_000_000L, options.MaxRequestSize);
         Assert.Equal(TimeSpan.FromSeconds(25), options.IdleTimeout);
         Assert.False(options.RouteReadsToFollowers);
-        Assert.Equal(CompressionType.Zstd, options.CompressionAlgorithm);
-        Assert.Equal(1024, options.AutoCompressionThresholdBytes);
     }
 }

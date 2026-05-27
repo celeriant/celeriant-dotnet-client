@@ -88,7 +88,7 @@ public static class ListExtensions
             ClientResponse response;
             try
             {
-                response = await client.SendRequestAsync(request, options.Compression, ct)
+                response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
             catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
@@ -173,7 +173,7 @@ public static class ListExtensions
             ClientResponse response;
             try
             {
-                response = await client.SendRequestAsync(request, options.Compression, ct)
+                response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
             catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
@@ -266,7 +266,7 @@ public static class ListExtensions
             ClientResponse response;
             try
             {
-                response = await client.SendRequestAsync(request, options.Compression, ct)
+                response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
             catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
@@ -318,10 +318,10 @@ public static class ListExtensions
         MaxEventTimestamp = item.MaxEventTimestamp,
         MinServerTimestamp = item.MinServerTimestamp,
         MaxServerTimestamp = item.MaxServerTimestamp,
-        MinEventBatchIndex = item.MinEventBatchIndex,
-        MaxEventBatchIndex = item.MaxEventBatchIndex,
-        MinEventIndex = item.MinEventIndex,
-        MaxEventIndex = item.MaxEventIndex,
+        MinAggregateVersion = item.MinAggregateVersion,
+        MaxAggregateVersion = item.MaxAggregateVersion,
+        MinEventSeq = item.MinEventSeq,
+        MaxEventSeq = item.MaxEventSeq,
         CompressedSize = item.CompressedSize,
         UncompressedSize = item.UncompressedSize,
     };
@@ -349,12 +349,12 @@ public static class ListExtensions
         target.MaxServerTimestamp = MaxNullable(target.MaxServerTimestamp, incoming.MaxServerTimestamp);
 
         // Min indices: min, but treat 0 as "no data" (skip)
-        target.MinEventBatchIndex = MinNonZero(target.MinEventBatchIndex, incoming.MinEventBatchIndex);
-        target.MinEventIndex = MinNonZero(target.MinEventIndex, incoming.MinEventIndex);
+        target.MinAggregateVersion = MinNonZero(target.MinAggregateVersion, incoming.MinAggregateVersion);
+        target.MinEventSeq = MinNonZero(target.MinEventSeq, incoming.MinEventSeq);
 
         // Max indices: max
-        target.MaxEventBatchIndex = Math.Max(target.MaxEventBatchIndex, incoming.MaxEventBatchIndex);
-        target.MaxEventIndex = Math.Max(target.MaxEventIndex, incoming.MaxEventIndex);
+        target.MaxAggregateVersion = Math.Max(target.MaxAggregateVersion, incoming.MaxAggregateVersion);
+        target.MaxEventSeq = Math.Max(target.MaxEventSeq, incoming.MaxEventSeq);
     }
 
     private static DateTimeOffset? MinNullable(DateTimeOffset? a, DateTimeOffset? b)

@@ -49,10 +49,7 @@ public class WireHeaderTests
         var compressionTypes = new[]
         {
             CompressionType.None,
-            CompressionType.Zstd,
-            CompressionType.Snappy,
-            CompressionType.Brotli,
-            CompressionType.Gzip,
+            CompressionType.ZstdDict,
         };
 
         foreach (var ct in compressionTypes)
@@ -124,11 +121,11 @@ public class WireHeaderTests
             messageType: 3,
             compressedLength: 100,
             uncompressedLength: 400,
-            compression: CompressionType.Zstd);
+            compression: CompressionType.ZstdDict);
 
         Assert.Equal(100u, header.CompressedLength);
         Assert.Equal(400u, header.UncompressedLength);
         Assert.NotEqual(header.CompressedLength, header.UncompressedLength);
-        Assert.Equal((byte)CompressionType.Zstd, header.CompressionType);
+        Assert.Equal((byte)CompressionType.ZstdDict, header.CompressionType);
     }
 }

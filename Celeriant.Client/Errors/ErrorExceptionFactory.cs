@@ -17,7 +17,7 @@ internal static class ErrorExceptionFactory
         return error.ErrorCode switch
         {
             // --- Read errors (1xxx) ---
-            ErrorResponse.ReadUnavailableBatchIndex
+            ErrorResponse.ReadUnavailableVersion
                 => new BatchIndexUnavailableException(error),
             ErrorResponse.ReadAggregateNotExists
                 => new AggregateNotFoundException(error),
@@ -36,6 +36,9 @@ internal static class ErrorExceptionFactory
                 => new AggregateNotFoundException(error),
             ErrorResponse.WriteAggregateRecreateNotAllowed
                 => new AggregateRecreateNotAllowedException(error),
+            // Prior write fsynced but not yet durable — retriable (hold client seq, retry).
+            ErrorResponse.WriteInflightDuplicate
+                => new InflightDuplicateWriteException(error),
             >= ErrorResponse.WriteEmptyEventsList and <= ErrorResponse.WriteAggregateRecreateNotAllowed
                 => new WriteErrorException(error),
             ErrorResponse.WriteReplicationError
@@ -55,11 +58,9 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.WriteSchemaCompilationFailed
                 or ErrorResponse.RegisterSchemaUnsupportedType
                 => new SchemaErrorException(error),
-            // Schema not-leader — defensive: MapErrorResponse handles IsNotLeader before calling this factory
-            ErrorResponse.RegisterSchemaNotLeader
-                => new CeleriantErrorException(error),
             ErrorResponse.RegisterSchemaCacheLoadError
                 or ErrorResponse.RegisterSchemaFsyncError
+                or ErrorResponse.RegisterSchemaCannotAcceptWrites
                 or ErrorResponse.RegisterSchemaReplicationError
                 or ErrorResponse.RegisterSchemaCoordinationFailed
                 => new ServerInternalErrorException(error),
@@ -101,7 +102,7 @@ internal static class ErrorExceptionFactory
             // --- Replication batch errors (6xxx) ---
             ErrorResponse.ReplicationBatchFsync
                 or ErrorResponse.ReplicationBatchSerialiseDatablocks
-                or ErrorResponse.ReplicationBatchWalIndexGap
+                or ErrorResponse.ReplicationBatchWalSeqGap
                 => new ServerInternalErrorException(error),
 
             // --- Exists / aggregate-details errors (7xxx) ---

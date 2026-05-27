@@ -26,4 +26,12 @@ public sealed class IdentifyRequest
     /// <summary>32-byte API key, base64-encoded. Alternative to RSA key pair.</summary>
     [Key(4)]
     public string? ApiKey { get; init; }
+
+    /// <summary>
+    /// SHA-256 hex of the compression dictionary the client already has cached, if any.
+    /// When it matches the cluster's current dictionary, the server returns the sha only
+    /// (no bytes), avoiding a redundant ~14&#160;KiB transfer. Null on the first connection.
+    /// </summary>
+    [Key(5)]
+    public string? KnownDictSha256 { get; init; }
 }

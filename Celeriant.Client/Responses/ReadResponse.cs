@@ -16,5 +16,5 @@ public sealed class ReadResponse
 
     [Key(2)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? NextEventBatchIndex { get; init; }
+    public long? NextAggregateVersion { get; init; }
 }

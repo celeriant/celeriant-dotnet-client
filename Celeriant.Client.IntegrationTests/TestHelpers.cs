@@ -22,7 +22,7 @@ internal static class TestHelpers
     public static WriteRequest SingleEventWrite(
         AggregateKey key,
         byte[] eventValue,
-        long clientEventIndex = 1,
+        long clientSeq = 1,
         bool allowCreate = true)
     {
         return new WriteRequest
@@ -37,8 +37,8 @@ internal static class TestHelpers
                     {
                         new AggregateEvent
                         {
-                            ClientEventIndex = clientEventIndex,
-                            EventIndex = 0,
+                            ClientSeq = clientSeq,
+                            EventSeq = 0,
                             EventTimestamp = DateTimeOffset.UtcNow,
                             EventTypeMajor = 1,
                             EventTypeMinor = 0,
@@ -61,8 +61,8 @@ internal static class TestHelpers
         var events = eventValues
             .Select((ev, i) => new AggregateEvent
             {
-                ClientEventIndex = i + 1,
-                EventIndex = 0,
+                ClientSeq = i + 1,
+                EventSeq = 0,
                 EventTimestamp = DateTimeOffset.UtcNow,
                 EventTypeMajor = 1,
                 EventTypeMinor = 0,

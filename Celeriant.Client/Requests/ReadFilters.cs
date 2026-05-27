@@ -6,11 +6,11 @@ namespace Celeriant.Client.Requests;
 
 /// <summary>
 /// Filtering options for a <see cref="ReadRequest"/>.
-/// All fields are optional except <see cref="FromEventBatchIndex"/>.
+/// All fields are optional except <see cref="FromAggregateVersion"/>.
 ///
 /// Use the static factory <see cref="From"/> or C# <c>with</c> expressions to build instances:
 /// <code>
-/// var filters = ReadFilters.From(1) with { ToEventBatchIndex = 100 };
+/// var filters = ReadFilters.From(1) with { ToAggregateVersion = 100 };
 /// </code>
 /// </summary>
 [MessagePackObject]
@@ -20,12 +20,12 @@ public record struct ReadFilters
     /// values of 0 are treated as 1.</summary>
     [Key(0)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long FromEventBatchIndex { get; init; }
+    public long FromAggregateVersion { get; init; }
 
     /// <summary>Stop reading at this event batch index (inclusive). Null means read to the end.</summary>
     [Key(1)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? ToEventBatchIndex { get; init; }
+    public long? ToAggregateVersion { get; init; }
 
     /// <summary>Only include events whose event type matches one of these values.</summary>
     [Key(2)]
@@ -65,12 +65,12 @@ public record struct ReadFilters
     /// <summary>Only include events with a client event index at or above this value.</summary>
     [Key(9)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? MinClientEventIndex { get; init; }
+    public long? MinClientSeq { get; init; }
 
     /// <summary>Only include events with a client event index at or below this value.</summary>
     [Key(10)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? MaxClientEventIndex { get; init; }
+    public long? MaxClientSeq { get; init; }
 
     /// <summary>Only include events with a client-supplied event timestamp at or after this value.</summary>
     [Key(11)]
@@ -85,17 +85,17 @@ public record struct ReadFilters
     /// <summary>Only include events with an event index at or above this value.</summary>
     [Key(13)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? MinEventIndex { get; init; }
+    public long? MinEventSeq { get; init; }
 
     /// <summary>Only include events with an event index at or below this value.</summary>
     [Key(14)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? MaxEventIndex { get; init; }
+    public long? MaxEventSeq { get; init; }
 
     /// <summary>
     /// Create a <see cref="ReadFilters"/> starting from the given event batch index.
     /// Clamps the value to a minimum of 1 (batch index 0 is invalid for reads).
     /// </summary>
-    public static ReadFilters From(long fromEventBatchIndex) =>
-        new() { FromEventBatchIndex = Math.Max(1, fromEventBatchIndex) };
+    public static ReadFilters From(long fromAggregateVersion) =>
+        new() { FromAggregateVersion = Math.Max(1, fromAggregateVersion) };
 }

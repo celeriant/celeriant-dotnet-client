@@ -37,7 +37,10 @@ public sealed class CeleriantPool : ICeleriantPool
 {
     private readonly CeleriantPoolOptions _options;
     private readonly ConcurrentDictionary<string, INodeConnectionPool> _nodePools = new();
-    private readonly Func<string, CeleriantPoolOptions, INodeConnectionPool> _poolFactory;
+    private readonly Func<string, CeleriantPoolOptions, PoolDictCache, INodeConnectionPool> _poolFactory;
+
+    // Shared compression-dictionary cache: one negotiated dictionary serves every node pool.
+    private readonly PoolDictCache _dictCache = new();
 
     // The address believed to be the current leader. Updated on failover.
     private volatile string _leaderAddress;
@@ -52,7 +55,7 @@ public sealed class CeleriantPool : ICeleriantPool
     // -------------------------------------------------------------------------
 
     public CeleriantPool(CeleriantPoolOptions options)
-        : this(options, static (addr, opts) => new NodeConnectionPool(addr, opts))
+        : this(options, static (addr, opts, dictCache) => new NodeConnectionPool(addr, opts, dictCache))
     {
     }
 
@@ -62,7 +65,7 @@ public sealed class CeleriantPool : ICeleriantPool
     /// </summary>
     internal CeleriantPool(
         CeleriantPoolOptions options,
-        Func<string, CeleriantPoolOptions, INodeConnectionPool> poolFactory)
+        Func<string, CeleriantPoolOptions, PoolDictCache, INodeConnectionPool> poolFactory)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _poolFactory = poolFactory ?? throw new ArgumentNullException(nameof(poolFactory));
@@ -172,7 +175,7 @@ public sealed class CeleriantPool : ICeleriantPool
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID for idempotency. Defaults to a new random GUID.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
-    /// <param name="expectedEventBatchIndex">If set, the server rejects the write unless the aggregate's
+    /// <param name="expectedVersion">If set, the server rejects the write unless the aggregate's
     /// current max event batch index matches this value (optimistic concurrency control).</param>
     /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
     /// that share the same <paramref name="clientId"/> and client event index.</param>
@@ -182,7 +185,7 @@ public sealed class CeleriantPool : ICeleriantPool
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
-        long? expectedEventBatchIndex = null,
+        long? expectedVersion = null,
         bool enforceClientIdempotency = false,
         CancellationToken ct = default)
         => WriteAsync(new WriteRequest
@@ -193,7 +196,7 @@ public sealed class CeleriantPool : ICeleriantPool
                 [key] = new SingleAggregateWrite
                 {
                     AllowCreate = allowCreate,
-                    ExpectedEventBatchIndex = expectedEventBatchIndex,
+                    ExpectedVersion = expectedVersion,
                     EnforceClientIdempotency = enforceClientIdempotency,
                     Events = events,
                 }
@@ -464,7 +467,7 @@ public sealed class CeleriantPool : ICeleriantPool
         => GetOrCreateNodePool(_leaderAddress).GetConnectionAsync(ct);
 
     private INodeConnectionPool GetOrCreateNodePool(string address)
-        => _nodePools.GetOrAdd(address, addr => _poolFactory(addr, _options));
+        => _nodePools.GetOrAdd(address, addr => _poolFactory(addr, _options, _dictCache));
 
     /// <summary>
     /// Returns the node addresses eligible for read operations.
@@ -505,8 +508,7 @@ public sealed class CeleriantPool : ICeleriantPool
 
             try
             {
-                var response = await _nodePools[addr].ExecuteRequestAsync(
-                    request, _options.CompressionAlgorithm, _options.AutoCompressionThresholdBytes, ct)
+                var response = await _nodePools[addr].ExecuteRequestAsync(request, ct)
                     .ConfigureAwait(false);
                 return mapResponse(response);
             }
@@ -552,9 +554,7 @@ public sealed class CeleriantPool : ICeleriantPool
 
             try
             {
-                var response = await pool.ExecuteRequestAsync(
-                    request, _options.CompressionAlgorithm, _options.AutoCompressionThresholdBytes, ct)
-                    .ConfigureAwait(false);
+                var response = await pool.ExecuteRequestAsync(request, ct).ConfigureAwait(false);
 
                 // Write succeeded — this node is the leader.
                 _leaderAddress = currentTarget;
@@ -578,6 +578,13 @@ public sealed class CeleriantPool : ICeleriantPool
             catch (ConnectionFailedException)
             {
                 // Connection dropped or unreachable. Try next known node.
+                var next = GetNextUntried(triedNodes);
+                if (next is null) throw;
+                currentTarget = next;
+            }
+            catch (CeleriantTimeoutException)
+            {
+                // Connection or request timed out. Try next known node.
                 var next = GetNextUntried(triedNodes);
                 if (next is null) throw;
                 currentTarget = next;

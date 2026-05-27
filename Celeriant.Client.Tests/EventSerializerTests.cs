@@ -60,8 +60,8 @@ public class EventSerializerTests
 
         Assert.Equal(1, evt.EventTypeMajor);
         Assert.Equal(0, evt.EventTypeMinor);
-        Assert.Equal(1, evt.ClientEventIndex);
-        Assert.Equal(0, evt.EventIndex);
+        Assert.Equal(1, evt.ClientSeq);
+        Assert.Equal(0, evt.EventSeq);
 
         var roundTripped = JsonSerializer.Deserialize<OrderPlaced>(evt.EventValue);
         Assert.Equal(payload, roundTripped);
@@ -78,14 +78,14 @@ public class EventSerializerTests
             eventTypeMajor: 10,
             new SensorReading([1.0, 2.0, 3.0], 1234567890),
             serializer,
-            clientEventIndex: 5,
+            clientSeq: 5,
             eventTypeMinor: 3,
             eventId: eventId,
             timestamp: timestamp);
 
         Assert.Equal(10, evt.EventTypeMajor);
         Assert.Equal(3, evt.EventTypeMinor);
-        Assert.Equal(5, evt.ClientEventIndex);
+        Assert.Equal(5, evt.ClientSeq);
         Assert.Equal(eventId, evt.EventId);
         Assert.Equal(timestamp, evt.EventTimestamp);
     }
@@ -123,8 +123,8 @@ public class EventSerializerTests
         var order = new OrderPlaced(1, 10m, "Eve");
         var sensor = new SensorReading([9.8, 9.7], 555);
 
-        var evt1 = AggregateEventExtensions.Create(eventTypeMajor: 1, order, json, clientEventIndex: 1);
-        var evt2 = AggregateEventExtensions.Create(eventTypeMajor: 2, sensor, camelJson, clientEventIndex: 2);
+        var evt1 = AggregateEventExtensions.Create(eventTypeMajor: 1, order, json, clientSeq: 1);
+        var evt2 = AggregateEventExtensions.Create(eventTypeMajor: 2, sensor, camelJson, clientSeq: 2);
 
         // Each event deserializes with its own serializer
         Assert.Equal(order, evt1.GetValue<OrderPlaced>(json));

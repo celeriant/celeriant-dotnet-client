@@ -16,11 +16,11 @@ public sealed class AggregateEvent
 {
     [Key(0)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long ClientEventIndex { get; init; }
+    public long ClientSeq { get; init; }
 
     [Key(1)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long EventIndex { get; init; }
+    public long EventSeq { get; init; }
 
     /// <summary>Client-assigned event ID (u128 as Guid). Serialized as 16 big-endian bytes.</summary>
     [Key(2)]

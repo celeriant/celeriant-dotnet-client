@@ -10,7 +10,7 @@ namespace Celeriant.Client.Streaming;
 /// as <see cref="IAsyncEnumerable{T}"/> streams.
 ///
 /// <para>
-/// The server returns event batches in pages. When <see cref="ReadResponse.NextEventBatchIndex"/>
+/// The server returns event batches in pages. When <see cref="ReadResponse.NextAggregateVersion"/>
 /// is non-null, additional pages are available. These extensions handle the pagination loop
 /// automatically, yielding each <see cref="AggregateEventBatch"/> as it arrives.
 /// </para>
@@ -37,15 +37,15 @@ public static class ReadExtensions
         ReadFilters filters,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        long? nextIndex = Math.Max(1, filters.FromEventBatchIndex);
+        long? nextIndex = Math.Max(1, filters.FromAggregateVersion);
 
         while (nextIndex is not null)
         {
             ct.ThrowIfCancellationRequested();
 
-            var currentFilters = nextIndex == filters.FromEventBatchIndex
+            var currentFilters = nextIndex == filters.FromAggregateVersion
                 ? filters
-                : filters with { FromEventBatchIndex = nextIndex.Value };
+                : filters with { FromAggregateVersion = nextIndex.Value };
 
             var response = await client.ReadAsync(new ReadRequest
             {
@@ -56,7 +56,7 @@ public static class ReadExtensions
             foreach (var batch in response.EventBatches)
                 yield return batch;
 
-            nextIndex = response.NextEventBatchIndex;
+            nextIndex = response.NextAggregateVersion;
         }
     }
 }

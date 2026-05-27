@@ -104,7 +104,7 @@ public sealed class TypedMethodTests
         var details = await Client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
 
-        Assert.Equal(1L, details.MaxEventBatchIndex);
+        Assert.Equal(1L, details.MaxAggregateVersion);
         Assert.False(details.IsDeleted);
     }
 
@@ -137,7 +137,7 @@ public sealed class TypedMethodTests
                 [key] = new SingleAggregateDelete
                 {
                     AllowRecreate = false,
-                    ExpectedEventBatchIndex = details.MaxEventBatchIndex,
+                    ExpectedVersion = details.MaxAggregateVersion,
                 }
             }
         });
@@ -162,7 +162,7 @@ public sealed class TypedMethodTests
         var result = await Client.TrimStartAsync(new TrimStartRequest
         {
             AggregateKey = key,
-            KeepFromEventBatchIndex = details.MaxEventBatchIndex,
+            KeepFromAggregateVersion = details.MaxAggregateVersion,
             ClientId = Guid.NewGuid(),
         });
 
@@ -172,7 +172,7 @@ public sealed class TypedMethodTests
         var read = await Client.ReadAsync(new ReadRequest
         {
             AggregateKey = key,
-            Filters = ReadFilters.From(details.MaxEventBatchIndex),
+            Filters = ReadFilters.From(details.MaxAggregateVersion),
         });
         var payloads = read.EventBatches
             .SelectMany(b => b.Events)
@@ -217,7 +217,7 @@ public sealed class TypedMethodTests
 
         var details = await client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
-        Assert.Equal(1L, details.MaxEventBatchIndex);
+        Assert.Equal(1L, details.MaxAggregateVersion);
     }
 
     [SkippableFact]
@@ -271,22 +271,22 @@ public sealed class TypedMethodTests
     // Helpers
     // =========================================================================
 
-    private static AggregateEvent MakeEvent(long clientEventIndex, string payload) =>
+    private static AggregateEvent MakeEvent(long clientSeq, string payload) =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,
             EventValue = Encoding.UTF8.GetBytes(payload),
         };
 
-    private static AggregateEvent MakeEvent(long clientEventIndex, byte[] payload) =>
+    private static AggregateEvent MakeEvent(long clientSeq, byte[] payload) =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,

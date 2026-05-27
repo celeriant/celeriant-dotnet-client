@@ -15,7 +15,7 @@ public sealed class AggregateEventBatch
 {
     [Key(0)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long EventBatchIndex { get; init; }
+    public long AggregateVersion { get; init; }
 
     /// <summary>Client ID that wrote this batch. Serialized as 16 big-endian bytes.</summary>
     [Key(1)]

@@ -67,8 +67,13 @@ Key pool options:
 | `RequestTimeout` | 30s | Per-request timeout |
 | `IdleTimeout` | 25s | Close idle connections (must be below server's `slow_client_timeout`) |
 | `RouteReadsToFollowers` | false | Keep the leader free for writes |
-| `CompressionAlgorithm` | Zstd | Auto-compress large payloads |
-| `AutoCompressionThresholdBytes` | 1024 | Minimum payload size before compression kicks in |
+
+Wire compression is automatic and requires no configuration. When the cluster uses dictionary
+compression it ships a zstd dictionary to the client during the Identify handshake (cached and
+shared across pooled connections). The client then compresses large variable-size requests
+(writes, schema registration) with that dictionary and transparently decompresses responses.
+Clusters that don't use dictionary compression — and connections that never identify — send
+everything uncompressed.
 
 ### DI registration
 
@@ -227,7 +232,7 @@ If you're already handling serialization yourself, or your payload is already by
 ```csharp
 new AggregateEvent
 {
-    ClientEventIndex = 1,
+    ClientSeq = 1,
     EventTimestamp = DateTimeOffset.UtcNow,
     EventTypeMajor = 1,
     EventValue = myBytes,
@@ -236,7 +241,7 @@ new AggregateEvent
 
 ## Client ID
 
-Every write carries a `ClientId` (Guid, mapped to u128 on the wire) that identifies the writing service. Celeriant uses it for exactly-once tracking: the highest `ClientEventIndex` is tracked per `(AggregateKey, ClientId)`.
+Every write carries a `ClientId` (Guid, mapped to u128 on the wire) that identifies the writing service. Celeriant uses it for exactly-once tracking: the highest `ClientSeq` is tracked per `(AggregateKey, ClientId)`.
 
 When client identity is enabled on the server, the write `ClientId` must match the identity derived from your Identify handshake. The server enforces this on every write, delete, trim, and schema request. A mismatch is rejected. So your RSA-derived identity or API key identity IS your write ClientId. See the [RSA key pair](#rsa-key-pair) section for how to derive it with `CeleriantCrypto.GenerateClientIdentity`.
 
@@ -265,11 +270,11 @@ await client.WriteAsync(key, [
 
 ### Optimistic concurrency control
 
-Pass `expectedEventBatchIndex` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteErrorException`. This is how you enforce business invariants at write time — no distributed locks needed.
+Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteErrorException`. This is how you enforce business invariants at write time — no distributed locks needed.
 
 ```csharp
 await client.WriteAsync(key, events,
-    expectedEventBatchIndex: currentBatchIndex);
+    expectedVersion: currentBatchIndex);
 ```
 
 When a concurrency conflict happens, the exception tells you exactly what went wrong:
@@ -277,12 +282,12 @@ When a concurrency conflict happens, the exception tells you exactly what went w
 ```csharp
 try
 {
-    await pool.WriteAsync(key, events, expectedEventBatchIndex: staleIndex);
+    await pool.WriteAsync(key, events, expectedVersion: staleIndex);
 }
 catch (WriteOccException ex)
 {
-    // ex.ExpectedEventBatchIndex — what you passed in
-    // ex.CurrentEventBatchIndex — where the aggregate actually is
+    // ex.ExpectedVersion — what you passed in
+    // ex.CurrentAggregateVersion — where the aggregate actually is
     // Re-read, re-validate, retry
 }
 ```
@@ -291,12 +296,12 @@ There is no automatic retry on OCC failures. That's by design — only your doma
 
 ### Exactly-once writes
 
-Set `EnforceClientIdempotency = true` and provide a `ClientEventIndex` on each event. Celeriant tracks the highest `ClientEventIndex` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with a `ClientIdempotencyViolation` instead of writing it twice.
+Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. Celeriant tracks the highest `ClientSeq` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with a `ClientIdempotencyViolation` instead of writing it twice.
 
 The retry behaviour depends on why the write failed:
 
-- **OCC failure**: re-derive `ClientEventIndex` from fresh state (the aggregate moved, your index assumption was wrong)
-- **Timeout**: hold `ClientEventIndex` constant (the write may have already landed, changing the index would bypass the dedup check)
+- **OCC failure**: re-derive `ClientSeq` from fresh state (the aggregate moved, your index assumption was wrong)
+- **Timeout**: hold `ClientSeq` constant (the write may have already landed, changing the index would bypass the dedup check)
 - **Idempotency violation**: the prior attempt already landed. Treat as success.
 
 ### Dynamic consistency boundaries
@@ -321,7 +326,7 @@ var accountState = await pool.ReadAsync(new ReadRequest
     Filters = ReadFilters.From(1),
 });
 
-var accountBatchIndex = accountState.EventBatches.LastOrDefault()?.EventBatchIndex ?? 0;
+var accountBatchIndex = accountState.EventBatches.LastOrDefault()?.AggregateVersion ?? 0;
 
 // 2. Run your domain logic
 var balance = RehydrateBalance(accountState);
@@ -339,13 +344,13 @@ try
             [accountKey] = new()
             {
                 Events = [AggregateEventExtensions.Create(1, new AccountDebited(orderTotal), serializer)],
-                ExpectedEventBatchIndex = accountBatchIndex,  // guard: account hasn't changed
+                ExpectedVersion = accountBatchIndex,  // guard: account hasn't changed
             },
             [orderKey] = new()
             {
                 AllowCreate = true,
                 Events = [AggregateEventExtensions.Create(1, new OrderPlaced(orderId, orderTotal, customer), serializer)],
-                ExpectedEventBatchIndex = 0,  // guard: order must not already exist
+                ExpectedVersion = 0,  // guard: order must not already exist
             },
         }
     });
@@ -357,7 +362,7 @@ catch (WriteOccException ex)
 }
 ```
 
-`ExpectedEventBatchIndex = 0` means "this aggregate must not have any writes yet". It's how you guard creates. For existing aggregates, use the batch index you got from your last read. If anything has moved, the entire request is rejected atomically.
+`ExpectedVersion = 0` means "this aggregate must not have any writes yet". It's how you guard creates. For existing aggregates, use the batch index you got from your last read. If anything has moved, the entire request is rejected atomically.
 
 This eliminates a whole class of problems that normally require sagas or two-phase commit. Transfer between two accounts? Atomic. Reserve inventory while placing an order? Atomic. Any business rule that spans aggregates within the same shard — list them in the same `WriteRequest`.
 
@@ -380,8 +385,8 @@ var response = await client.ReadAsync(new ReadRequest
 ```csharp
 var filters = new ReadFilters
 {
-    FromEventBatchIndex = 50,
-    ToEventBatchIndex = 100,
+    FromAggregateVersion = 50,
+    ToAggregateVersion = 100,
     IncludeEventTypes = [1, 2, 3],
     MinEventTimestamp = DateTimeOffset.UtcNow.AddDays(-7),
 };
@@ -411,7 +416,7 @@ var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest
     AggregateKey = key,
 });
 
-// details.MinEventBatchIndex, details.MaxEventBatchIndex
+// details.MinAggregateVersion, details.MaxAggregateVersion
 // details.IsDeleted, details.LastServerTimestamp, etc.
 ```
 
@@ -459,7 +464,7 @@ while (!ct.IsCancellationRequested)
     {
         // evt.OrgId, evt.AggregateTypeId, evt.AggregateId
         // evt.Operation — Write, Create, Delete, TrimStart, etc.
-        // evt.FromEventBatchIndex, evt.ToEventBatchIndex — for writes
+        // evt.FromAggregateVersion, evt.ToAggregateVersion — for writes
     }
 }
 ```
@@ -480,7 +485,7 @@ Over time you might want to discard old events to free up disk space. `TrimStart
 await pool.TrimStartAsync(new TrimStartRequest
 {
     AggregateKey = key,
-    KeepFromEventBatchIndex = 100,  // batches 1–99 are gone
+    KeepFromAggregateVersion = 100,  // batches 1–99 are gone
     ClientId = myClientId,
 });
 ```
@@ -498,7 +503,7 @@ await pool.DeleteAsync(new DeleteRequest
         [key] = new()
         {
             AllowRecreate = true,
-            AllowIndexContinuation = false,
+            AllowSequenceContinuation = false,
         }
     }
 });
@@ -507,9 +512,9 @@ await pool.DeleteAsync(new DeleteRequest
 Two flags control what happens after deletion:
 
 - `AllowRecreate` — can this aggregate be written to again? Set `false` for a permanent, irreversible delete.
-- `AllowIndexContinuation` — if recreated, do event indices continue from where they left off, or restart from 1?
+- `AllowSequenceContinuation` — if recreated, do event indices continue from where they left off, or restart from 1?
 
-You can also pass `ExpectedEventBatchIndex` for optimistic concurrency on deletes.
+You can also pass `ExpectedVersion` for optimistic concurrency on deletes.
 
 ## Listing and discovery
 
@@ -541,22 +546,15 @@ await foreach (var agg in pool.ListAggregatesAsync(options: options))
 
 ## Compression
 
-Celeriant compresses request payloads automatically when they exceed a threshold. The default is Zstd with a 1024-byte threshold — payloads under 1KB are sent uncompressed.
+Compression is automatic, dictionary-based, and requires no configuration.
 
-Supported algorithms: `Zstd`, `Snappy`, `Brotli`, `Gzip`, or `None`.
+When the cluster uses dictionary compression, it ships a zstd dictionary to the client during the
+Identify handshake. The pool caches that dictionary and shares it across connections (advertising
+its sha on each new connection so the server can skip resending the bytes). The client then
+compresses large variable-size requests — writes and schema registration whose payload is at least
+1&#160;KB — with that dictionary, and transparently decompresses any dictionary-compressed responses.
 
-Configure via pool options:
-
-```csharp
-new CeleriantPoolOptions
-{
-    CompressionAlgorithm = CompressionType.Zstd,
-    AutoCompressionThresholdBytes = 2048,
-};
-```
-
-Or per-request on the low-level client:
-
-```csharp
-client.SendRequestAsync(request, CompressionType.Snappy);
-```
+There is nothing to configure and no per-request compression flag: a connection that has negotiated
+a dictionary compresses eligible requests automatically, and connections that never identify (or
+clusters not using dictionary compression) send everything uncompressed. The only wire compression
+values are `None` and `ZstdDict`.

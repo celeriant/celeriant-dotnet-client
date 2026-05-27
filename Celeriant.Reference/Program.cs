@@ -100,18 +100,14 @@ app.MapPost("/api/accounts/{accountId}/deposit", async (
     AmountRequest req,
     HttpContext httpContext,
     AccountService svc,
-    IdempotencyCache cache,
     CancellationToken ct) =>
 {
-    if (TryIdempotencyHit(httpContext, cache, out var cached))
-        return Results.Json(cached, jsonOptions);
+    var eventId = ParseIdempotencyKey(httpContext);
 
     try
     {
-        var result = await svc.DepositAsync(accountId, req.AmountCents, ct);
-        var response = new { balanceCents = result.BalanceCents, batchIndex = result.BatchIndex };
-        SetIdempotencyResult(httpContext, cache, response);
-        return Results.Json(response, jsonOptions);
+        var result = await svc.DepositAsync(accountId, req.AmountCents, eventId, ct);
+        return Results.Json(new { balanceCents = result.BalanceCents, batchIndex = result.BatchIndex }, jsonOptions);
     }
     catch (ValidationException ex)
     {
@@ -137,18 +133,14 @@ app.MapPost("/api/accounts/{accountId}/withdraw", async (
     AmountRequest req,
     HttpContext httpContext,
     AccountService svc,
-    IdempotencyCache cache,
     CancellationToken ct) =>
 {
-    if (TryIdempotencyHit(httpContext, cache, out var cached))
-        return Results.Json(cached, jsonOptions);
+    var eventId = ParseIdempotencyKey(httpContext);
 
     try
     {
-        var result = await svc.WithdrawAsync(accountId, req.AmountCents, ct);
-        var response = new { balanceCents = result.BalanceCents, batchIndex = result.BatchIndex };
-        SetIdempotencyResult(httpContext, cache, response);
-        return Results.Json(response, jsonOptions);
+        var result = await svc.WithdrawAsync(accountId, req.AmountCents, eventId, ct);
+        return Results.Json(new { balanceCents = result.BalanceCents, batchIndex = result.BatchIndex }, jsonOptions);
     }
     catch (InsufficientFundsException ex)
     {
@@ -182,21 +174,18 @@ app.MapPost("/api/transfers", async (
     TransferRequest req,
     HttpContext httpContext,
     AccountService svc,
-    IdempotencyCache cache,
     CancellationToken ct) =>
 {
-    if (TryIdempotencyHit(httpContext, cache, out var cached))
-        return Results.Json(cached, jsonOptions);
+    var eventId = ParseIdempotencyKey(httpContext);
 
     try
     {
-        var result = await svc.TransferAsync(req.FromAccountId, req.ToAccountId, req.AmountCents, ct);
+        var result = await svc.TransferAsync(req.FromAccountId, req.ToAccountId, req.AmountCents, eventId, ct);
         var response = new
         {
             from = new { balanceCents = result.From.BalanceCents, batchIndex = result.From.BatchIndex },
             to = new { balanceCents = result.To.BalanceCents, batchIndex = result.To.BatchIndex },
         };
-        SetIdempotencyResult(httpContext, cache, response);
         return Results.Json(response, jsonOptions);
     }
     catch (InsufficientFundsException ex)
@@ -268,24 +257,15 @@ app.Run();
 
 // ─────────────────── Idempotency helpers ───────────────────
 
-static bool TryIdempotencyHit(HttpContext context, IdempotencyCache cache, out object? result)
-{
-    result = null;
-    if (!context.Request.Headers.TryGetValue("Idempotency-Key", out var header))
-        return false;
-    if (!Guid.TryParse(header.ToString(), out var key))
-        return false;
-    return cache.TryGet(key, out result);
-}
-
-static void SetIdempotencyResult(HttpContext context, IdempotencyCache cache, object result)
-{
-    if (context.Request.Headers.TryGetValue("Idempotency-Key", out var header)
-        && Guid.TryParse(header.ToString(), out var key))
-    {
-        cache.Set(key, result);
-    }
-}
+// The frontend sends a stable Idempotency-Key (UUID) per user intent. We plumb it through as the
+// event_id on the WriteRequest; the server uses it for an extra dedup layer, and AccountService
+// warms its (event_id, aggregate_id) cache from catch-up so retries on a cold instance resolve
+// without writing duplicates. Returns null when the header is absent or not a UUID.
+static Guid? ParseIdempotencyKey(HttpContext context)
+    => context.Request.Headers.TryGetValue("Idempotency-Key", out var header)
+       && Guid.TryParse(header.ToString(), out var key)
+        ? key
+        : null;
 
 // ─────────────────── Database init ───────────────────
 
@@ -328,7 +308,7 @@ async Task SeedAccounts(ICeleriantPool pool, NpgsqlDataSource db)
         try
         {
             var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest { AggregateKey = key });
-            if (details.MaxEventBatchIndex > 0)
+            if (details.MaxAggregateVersion > 0)
                 continue;
         }
         catch (AggregateNotFoundException)
@@ -391,7 +371,7 @@ sealed class WatchBroadcaster(IConfiguration config, ILogger<WatchBroadcaster> l
                         var watchEvent = new WatchEvent(
                             evt.AggregateId,
                             evt.Operation.ToString(),
-                            evt.ToEventBatchIndex);
+                            evt.ToAggregateVersion);
 
                         foreach (var sub in _subscribers.Keys)
                         {

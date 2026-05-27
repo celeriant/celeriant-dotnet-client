@@ -9,7 +9,7 @@ namespace Celeriant.Client.Responses;
 public sealed class ErrorResponse
 {
     // --- Read errors: 1xxx ---
-    public const uint ReadUnavailableBatchIndex = 1000;
+    public const uint ReadUnavailableVersion = 1000;
     public const uint ReadAggregateNotExists = 1001;
     public const uint ReadCacheLoadLockTimeout = 1002;
     public const uint ReadCacheLoadFileScan = 1003;
@@ -29,6 +29,10 @@ public sealed class ErrorResponse
     public const uint WriteCacheAggregateClientError = 2009;
     public const uint WriteAggregateExistsCacheError = 2010;
     public const uint WriteNotLeader = 2011;
+    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    public const uint WriteReplicationBackpressure = 2012;
+    /// <summary>Write is fsynced but replication is not yet confirmed — duplicate of an in-flight write. Hold the client seq and retry.</summary>
+    public const uint WriteInflightDuplicate = 2013;
 
     // --- Schema errors: 2020-2029 ---
     public const uint RegisterSchemaAlreadyExists = 2020;
@@ -38,7 +42,7 @@ public sealed class ErrorResponse
     public const uint RegisterSchemaUnsupportedType = 2024;
     public const uint RegisterSchemaCacheLoadError = 2025;
     public const uint RegisterSchemaFsyncError = 2026;
-    public const uint RegisterSchemaNotLeader = 2027;
+    public const uint RegisterSchemaCannotAcceptWrites = 2027;
     public const uint RegisterSchemaReplicationError = 2028;
     public const uint RegisterSchemaCoordinationFailed = 2029;
 
@@ -67,7 +71,7 @@ public sealed class ErrorResponse
     // --- Replication batch errors: 6xxx ---
     public const uint ReplicationBatchFsync = 6000;
     public const uint ReplicationBatchSerialiseDatablocks = 6001;
-    public const uint ReplicationBatchWalIndexGap = 6002;
+    public const uint ReplicationBatchWalSeqGap = 6002;
 
     // --- Exists / aggregate-details errors: 7xxx ---
     public const uint ExistsCacheError = 7000;
@@ -113,13 +117,13 @@ public sealed class ErrorResponse
     private IReadOnlyDictionary<string, JsonElement>? _parsedFields;
 
     [IgnoreMember]
-    public bool IsNotLeader => ErrorCode is WriteNotLeader or TrimNotLeader or DeleteNotLeader or RegisterSchemaNotLeader;
+    public bool IsNotLeader => ErrorCode is WriteNotLeader or TrimNotLeader or DeleteNotLeader;
 
     [IgnoreMember]
     public bool IsIdentityRequired => ErrorCode == IdentifyRequired;
 
     [IgnoreMember]
-    public bool IsServerBusy => ErrorCode == ServerBusy;
+    public bool IsServerBusy => ErrorCode is ServerBusy or WriteReplicationBackpressure;
 
     /// <summary>
     /// The error message parsed as a flat JSON object. Each key maps to its raw

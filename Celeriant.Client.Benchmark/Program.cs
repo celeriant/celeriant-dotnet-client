@@ -244,8 +244,8 @@ ClientRequest.Write[] PreAllocateRequests(int connectionId, Guid writeClientId)
                     [
                         new AggregateEvent
                         {
-                            ClientEventIndex = 3,
-                            EventIndex = 0,
+                            ClientSeq = 3,
+                            EventSeq = 0,
                             EventId = eventId,
                             EventTimestamp = DateTimeOffset.UnixEpoch,
                             EventTypeMajor = 2,

@@ -49,7 +49,7 @@ public class CeleriantPoolTests
         EventTypeMajor = 1,
         EventTypeMinor = 0,
         EventValue = [1, 2, 3],
-        ClientEventIndex = 1,
+        ClientSeq = 1,
     };
 
     private static ClientResponse.Write SuccessWriteResponse()
@@ -71,8 +71,6 @@ public class CeleriantPoolTests
         var mock = MockPool(address);
         mock.Setup(p => p.ExecuteRequestAsync(
                 It.IsAny<ClientRequest>(),
-                It.IsAny<CompressionType>(),
-                It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
         return mock;
@@ -83,8 +81,6 @@ public class CeleriantPoolTests
         var mock = MockPool(address);
         mock.Setup(p => p.ExecuteRequestAsync(
                 It.IsAny<ClientRequest>(),
-                It.IsAny<CompressionType>(),
-                It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(exception);
         return mock;
@@ -97,7 +93,7 @@ public class CeleriantPoolTests
         CeleriantPoolOptions options,
         Dictionary<string, Mock<INodeConnectionPool>> mocks)
     {
-        return new CeleriantPool(options, (addr, _) =>
+        return new CeleriantPool(options, (addr, _, _) =>
         {
             if (mocks.TryGetValue(addr, out var mock))
                 return mock.Object;
@@ -159,8 +155,6 @@ public class CeleriantPoolTests
         Assert.NotNull(result);
         leaderMock.Verify(p => p.ExecuteRequestAsync(
             It.IsAny<ClientRequest>(),
-            It.IsAny<CompressionType>(),
-            It.IsAny<int>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -176,8 +170,7 @@ public class CeleriantPoolTests
 
         var oldLeaderMock = MockPool("leader:10000");
         oldLeaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(notLeaderEx);
 
         var newLeaderMock = MockPoolThatSucceeds("new-leader:10000", SuccessWriteResponse());
@@ -193,8 +186,7 @@ public class CeleriantPoolTests
 
         Assert.NotNull(result);
         newLeaderMock.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // -----------------------------------------------------------------------
@@ -209,8 +201,7 @@ public class CeleriantPoolTests
 
         var leaderMock = MockPool("leader:10000");
         leaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(notLeaderEx);
 
         var followerMock = MockPoolThatSucceeds("follower:10000", SuccessWriteResponse());
@@ -285,8 +276,7 @@ public class CeleriantPoolTests
 
         var leaderMock = MockPool("leader:10000");
         leaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(notLeaderEx);
 
         var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
@@ -311,8 +301,7 @@ public class CeleriantPoolTests
 
         var oldLeaderMock = MockPool("leader:10000");
         oldLeaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(notLeaderEx);
 
         var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
@@ -329,8 +318,7 @@ public class CeleriantPoolTests
 
         // Verify the discovered leader was used
         discoveredMock.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // -----------------------------------------------------------------------
@@ -433,11 +421,9 @@ public class CeleriantPoolTests
 
         // Follower should be used, not leader
         followerMock.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         leaderMock.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -456,8 +442,7 @@ public class CeleriantPoolTests
 
         Assert.NotNull(result);
         leaderMock.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // -----------------------------------------------------------------------
@@ -502,7 +487,7 @@ public class CeleriantPoolTests
         var result = await pool.TrimStartAsync(new TrimStartRequest
         {
             AggregateKey = TestKey,
-            KeepFromEventBatchIndex = 5,
+            KeepFromAggregateVersion = 5,
         });
 
         Assert.NotNull(result);
@@ -583,10 +568,9 @@ public class CeleriantPoolTests
         ClientRequest? captured = null;
         var leaderMock = MockPool("leader:10000");
         leaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .Callback<ClientRequest, CompressionType, int, CancellationToken>(
-                (req, _, _, _) => captured = req)
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<ClientRequest, CancellationToken>(
+                (req, _) => captured = req)
             .ReturnsAsync(SuccessWriteResponse());
 
         var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
@@ -615,14 +599,12 @@ public class CeleriantPoolTests
 
         var mockA = MockPool("node-a:10000");
         mockA.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new NotLeaderException(error, "node-b:10000"));
 
         var mockB = MockPool("node-b:10000");
         mockB.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new NotLeaderException(error, "node-c:10000"));
 
         var mockC = MockPoolThatSucceeds("node-c:10000", SuccessWriteResponse());
@@ -640,8 +622,7 @@ public class CeleriantPoolTests
 
         Assert.NotNull(result);
         mockC.Verify(p => p.ExecuteRequestAsync(
-            It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-            It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // -----------------------------------------------------------------------
@@ -653,8 +634,7 @@ public class CeleriantPoolTests
     {
         var leaderMock = MockPool("leader:10000");
         leaderMock.Setup(p => p.ExecuteRequestAsync(
-                It.IsAny<ClientRequest>(), It.IsAny<CompressionType>(),
-                It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new CeleriantTimeoutException("timed out"));
 
         var mocks = new Dictionary<string, Mock<INodeConnectionPool>>

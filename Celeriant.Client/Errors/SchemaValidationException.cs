@@ -21,7 +21,7 @@ public class SchemaValidationException : SchemaErrorException
     /// <summary>
     /// The client event index of the event that failed validation within the batch.
     /// </summary>
-    public long FailedClientEventIndex { get; }
+    public long FailedClientSeq { get; }
 
     /// <summary>
     /// The validation error message describing why the payload does not conform to the schema.
@@ -32,7 +32,7 @@ public class SchemaValidationException : SchemaErrorException
     {
         FailedEventTypeMajor = error.GetLong("event_type_major") ?? 0;
         FailedEventTypeMinor = error.GetLong("event_type_minor") ?? 0;
-        FailedClientEventIndex = error.GetLong("client_event_index") ?? 0;
+        FailedClientSeq = error.GetLong("client_event_index") ?? 0;
         FailedValidationError = error.GetString("validation_error");
     }
 }

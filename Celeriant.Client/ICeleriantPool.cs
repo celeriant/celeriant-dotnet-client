@@ -12,7 +12,7 @@ public interface ICeleriantPool : IAsyncDisposable
 {
     /// <summary>Send a read request. Distributed across all known nodes via round-robin.</summary>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist.</exception>
-    /// <exception cref="Errors.BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="Errors.BatchIndexUnavailableException.MinimumAvailableBatchIndex"/>.</exception>
+    /// <exception cref="Errors.BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="Errors.BatchIndexUnavailableException.MinimumAvailableVersion"/>.</exception>
     /// <exception cref="Errors.ConnectionFailedException">All known nodes are unreachable.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
@@ -58,7 +58,7 @@ public interface ICeleriantPool : IAsyncDisposable
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
-        long? expectedEventBatchIndex = null,
+        long? expectedVersion = null,
         bool enforceClientIdempotency = false,
         CancellationToken ct = default);
 

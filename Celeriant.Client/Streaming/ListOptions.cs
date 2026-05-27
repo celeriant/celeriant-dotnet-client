@@ -1,16 +1,12 @@
 using System.ComponentModel;
-using Celeriant.Client.Protocol;
 
 namespace Celeriant.Client.Streaming;
 
 /// <summary>
-/// Options controlling shard routing and compression for list operations.
+/// Options controlling shard routing for list operations.
 /// </summary>
 public sealed class ListOptions
 {
-    /// <summary>Compression to apply when fetching list pages. Defaults to <see cref="CompressionType.None"/>.</summary>
-    public CompressionType Compression { get; init; } = CompressionType.None;
-
     /// <summary>
     /// When true, include deleted aggregates in results. Only meaningful for
     /// <see cref="ListExtensions.ListAggregatesAsync"/>.

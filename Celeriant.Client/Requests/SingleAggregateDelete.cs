@@ -11,9 +11,9 @@ public sealed class SingleAggregateDelete
     public bool AllowRecreate { get; init; }
 
     [Key(1)]
-    public bool AllowIndexContinuation { get; init; }
+    public bool AllowSequenceContinuation { get; init; }
 
     [Key(2)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? ExpectedEventBatchIndex { get; init; }
+    public long? ExpectedVersion { get; init; }
 }

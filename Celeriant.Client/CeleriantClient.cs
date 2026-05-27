@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Text;
 using Celeriant.Client.Crypto;
 using Celeriant.Client.Errors;
 using Celeriant.Client.Protocol;
@@ -27,6 +28,20 @@ public sealed class CeleriantClient : ICeleriantClient
     private long _maxRequestSize = 10_000_000;
     private long _maxResponseSize = 64 * 1024 * 1024; // 64 MB — matches server default
     private TimeSpan? _timeout;
+
+    // Compression dictionary received from the cluster during Identify, if any.
+    // When set, variable-size requests above the threshold are compressed with it,
+    // and ZstdDict responses are decompressed with it. Null => always uncompressed.
+    private CachedDict? _dict;
+
+    /// <summary>
+    /// Serialized-payload size (bytes) at or above which a variable-size request is
+    /// dictionary-compressed. Mirrors the server's <c>RESPONSE_COMPRESSION_THRESHOLD_BYTES</c>.
+    /// </summary>
+    private const int CompressionThresholdBytes = 1024;
+
+    /// <summary>The compression dictionary negotiated for this connection, if any.</summary>
+    internal CachedDict? CurrentDict => _dict;
 
     // -------------------------------------------------------------------------
     // Construction
@@ -169,7 +184,7 @@ public sealed class CeleriantClient : ICeleriantClient
     }
 
     /// <summary>
-    /// Set a per-request timeout applied to each <see cref="SendRequestAsync(ClientRequest, CompressionType, CancellationToken)"/> call.
+    /// Set a per-request timeout applied to each <see cref="SendRequestAsync(ClientRequest, CancellationToken)"/> call.
     /// Note: this mutates the current instance and returns it for chaining.
     /// </summary>
     public CeleriantClient WithTimeout(TimeSpan timeout)
@@ -189,8 +204,23 @@ public sealed class CeleriantClient : ICeleriantClient
     /// </summary>
     /// <param name="identityConfig">Authentication credentials.</param>
     /// <param name="ct">Cancellation token.</param>
-    public async Task<Guid?> IdentifyAsync(
+    public Task<Guid?> IdentifyAsync(
         ClientIdentityConfig identityConfig,
+        CancellationToken ct = default)
+        => IdentifyAsync(identityConfig, knownDictSha: null, dictLookup: null, ct);
+
+    /// <summary>
+    /// Perform the Identify handshake, advertising a previously cached compression-dictionary sha
+    /// so the server can skip re-sending the bytes when they match.
+    /// </summary>
+    /// <param name="identityConfig">Authentication credentials.</param>
+    /// <param name="knownDictSha">SHA-256 hex of a dictionary this client already holds, or null.</param>
+    /// <param name="dictLookup">Resolves dictionary bytes for a sha the server confirms but does not resend.</param>
+    /// <param name="ct">Cancellation token.</param>
+    internal async Task<Guid?> IdentifyAsync(
+        ClientIdentityConfig identityConfig,
+        string? knownDictSha,
+        Func<string, byte[]?>? dictLookup,
         CancellationToken ct = default)
     {
         IdentifyRequest req;
@@ -199,7 +229,7 @@ public sealed class CeleriantClient : ICeleriantClient
         if (!string.IsNullOrEmpty(resolvedApiKey))
         {
             // API key authentication (direct base64 key or Guid-derived)
-            req = new IdentifyRequest { ApiKey = resolvedApiKey };
+            req = new IdentifyRequest { ApiKey = resolvedApiKey, KnownDictSha256 = knownDictSha };
         }
         else if (!string.IsNullOrEmpty(identityConfig.PublicKeyBase64)
                  && !string.IsNullOrEmpty(identityConfig.PrivateKeyBase64))
@@ -212,6 +242,7 @@ public sealed class CeleriantClient : ICeleriantClient
                 PublicKey = identityConfig.PublicKeyBase64,
                 Nonce = nonce,
                 Signature = signature,
+                KnownDictSha256 = knownDictSha,
             };
         }
         else
@@ -222,7 +253,7 @@ public sealed class CeleriantClient : ICeleriantClient
                 nameof(identityConfig));
         }
 
-        // Identify is always sent as a fixed-size message (no compression).
+        // Identify is always sent uncompressed (no dictionary exists yet on a fresh connection).
         byte[] payload = WireCodec.Serialize(req);
         var header = WireHeader.ForRequest(MessageTypes.Requests.Identify, (uint)payload.Length);
 
@@ -238,6 +269,12 @@ public sealed class CeleriantClient : ICeleriantClient
             await ReadExactIntoAsync(headerBuf, WireHeader.Size, effectiveCt).ConfigureAwait(false);
             WireHeader responseHeader = WireHeader.ParseFrom(headerBuf);
 
+            if (responseHeader.CompressedLength > _maxResponseSize)
+                throw new ProtocolException(
+                    $"Identify response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}.");
+
+            // The Identify response carries the (uncompressed) dictionary bytes, so it can be
+            // larger than a fixed-size frame; read exactly CompressedLength bytes.
             int respLen = (int)responseHeader.CompressedLength;
             byte[] responsePayload = new byte[respLen];
             await ReadExactIntoAsync(responsePayload, respLen, effectiveCt).ConfigureAwait(false);
@@ -258,6 +295,17 @@ public sealed class CeleriantClient : ICeleriantClient
             {
                 throw new ProtocolException("Failed to deserialize IdentifyResponse.", ex);
             }
+
+            // Resolve the dictionary for this connection:
+            //   sha + bytes  → server shipped a new/refreshed dictionary; store it.
+            //   sha only     → server confirmed our advertised sha; resolve bytes from the pool cache.
+            //   no sha       → cluster is not using ZstdDict; no dictionary.
+            _dict = (identifyResponse.CompressionDictSha256, identifyResponse.CompressionDictBytes) switch
+            {
+                (string sha, byte[] bytes) => new CachedDict(sha, bytes),
+                (string sha, null) => dictLookup?.Invoke(sha) is { } cached ? new CachedDict(sha, cached) : null,
+                (null, _) => null,
+            };
 
             return identifyResponse.ClientId;
         }
@@ -287,7 +335,7 @@ public sealed class CeleriantClient : ICeleriantClient
     /// <param name="request">The read request.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
-    /// <exception cref="BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="BatchIndexUnavailableException.MinimumAvailableBatchIndex"/>.</exception>
+    /// <exception cref="BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="BatchIndexUnavailableException.MinimumAvailableVersion"/>.</exception>
     public async Task<ReadResponse> ReadAsync(
         ReadRequest request,
         CancellationToken ct = default)
@@ -327,7 +375,7 @@ public sealed class CeleriantClient : ICeleriantClient
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID for idempotency. Defaults to a new random GUID.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
-    /// <param name="expectedEventBatchIndex">If set, the server rejects the write unless the aggregate's
+    /// <param name="expectedVersion">If set, the server rejects the write unless the aggregate's
     /// current max event batch index matches this value (optimistic concurrency control).</param>
     /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
     /// that share the same <paramref name="clientId"/> and client event index.</param>
@@ -343,7 +391,7 @@ public sealed class CeleriantClient : ICeleriantClient
         AggregateEvent[] events,
         Guid? clientId = null,
         bool allowCreate = true,
-        long? expectedEventBatchIndex = null,
+        long? expectedVersion = null,
         bool enforceClientIdempotency = false,
         CancellationToken ct = default)
         => WriteAsync(new WriteRequest
@@ -354,7 +402,7 @@ public sealed class CeleriantClient : ICeleriantClient
                 [key] = new SingleAggregateWrite
                 {
                     AllowCreate = allowCreate,
-                    ExpectedEventBatchIndex = expectedEventBatchIndex,
+                    ExpectedVersion = expectedVersion,
                     EnforceClientIdempotency = enforceClientIdempotency,
                     Events = events,
                 }
@@ -437,65 +485,36 @@ public sealed class CeleriantClient : ICeleriantClient
     /// <summary>
     /// Send a request and receive a typed response.
     ///
+    /// Variable-size requests (writes, schema registration) are dictionary-compressed
+    /// automatically when this connection negotiated a dictionary during Identify and the
+    /// payload meets the size threshold; everything else is sent uncompressed.
+    ///
     /// Throws for transport/protocol errors. Server-side errors always throw a
     /// <see cref="CeleriantErrorException"/> subclass. <see cref="NotLeaderException"/> and
     /// <see cref="IdentityRequiredException"/> are thrown for their respective error codes.
     /// </summary>
     /// <param name="request">The request discriminated union variant to send.</param>
-    /// <param name="compression">
-    /// Compression to apply to variable-size messages. Fixed-size messages always use None.
-    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    public Task<ClientResponse> SendRequestAsync(
+    public async Task<ClientResponse> SendRequestAsync(
         ClientRequest request,
-        CompressionType compression = CompressionType.None,
         CancellationToken ct = default)
-        => SendRequestAsync(request, compression, autoCompressionThresholdBytes: 0, ct);
-
-    /// <summary>
-    /// Send a request with automatic compression based on payload size.
-    /// Compression is applied only when the serialized payload of a variable-size message
-    /// meets or exceeds <paramref name="autoCompressionThresholdBytes"/>.
-    /// </summary>
-    internal async Task<ClientResponse> SendRequestAsync(
-        ClientRequest request,
-        CompressionType compression,
-        int autoCompressionThresholdBytes,
-        CancellationToken ct)
     {
         // 1. Map request variant to (messageTypeId, serializable payload, isVariableSize)
         (uint messageTypeId, byte[] serialized, bool isVariableSize) = SerializeRequest(request);
 
-        // 2-4. Determine compression and lengths
-        byte[] payload;
-        uint compressedLength;
-        uint uncompressedLength;
-        CompressionType effectiveCompression;
+        // 2. Choose compression (dictionary-based, auto) and produce the frame body
+        (CompressionType effectiveCompression, byte[] payload, uint uncompressedLength) =
+            PrepareRequestBody(request, serialized, isVariableSize);
+        uint compressedLength = (uint)payload.Length;
 
-        if (isVariableSize && compression != CompressionType.None
-            && serialized.Length >= autoCompressionThresholdBytes)
-        {
-            uncompressedLength = (uint)serialized.Length;
-            payload = WireCodec.Compress(serialized, compression);
-            compressedLength = (uint)payload.Length;
-            effectiveCompression = compression;
-        }
-        else
-        {
-            payload = serialized;
-            compressedLength = (uint)serialized.Length;
-            uncompressedLength = (uint)serialized.Length;
-            effectiveCompression = CompressionType.None;
-        }
-
-        // 5. Validate against MaxRequestSize
+        // 3. Validate against MaxRequestSize
         if (compressedLength > _maxRequestSize)
         {
             throw new ArgumentException(
                 $"Request payload ({compressedLength} bytes) exceeds MaxRequestSize ({_maxRequestSize} bytes).");
         }
 
-        // 6. Build WireHeader
+        // 4. Build WireHeader
         WireHeader header = effectiveCompression == CompressionType.None
             ? WireHeader.ForRequest(messageTypeId, compressedLength)
             : WireHeader.ForCompressedRequest(messageTypeId, compressedLength, uncompressedLength, effectiveCompression);
@@ -526,16 +545,15 @@ public sealed class CeleriantClient : ICeleriantClient
             {
                 await ReadExactIntoAsync(responsePayload, respLen, effectiveCt).ConfigureAwait(false);
 
-                // 11. Decompress if needed
-                if (responseHeader.CompressedLength != responseHeader.UncompressedLength)
+                // 5. Decompress dictionary-compressed responses.
+                if ((CompressionType)responseHeader.CompressionType != CompressionType.None)
                 {
-                    var responseCompression = (CompressionType)responseHeader.CompressionType;
                     byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
-                    byte[] decompressed = WireCodec.Decompress(compressed, responseCompression, responseHeader.UncompressedLength);
+                    byte[] decompressed = DecompressResponse(responseHeader, compressed);
                     return DeserializeResponse(responseHeader.MessageType, decompressed);
                 }
 
-                // 12-14. Deserialize and map to ClientResponse
+                // 6. Deserialize and map to ClientResponse
                 return DeserializeResponse(responseHeader.MessageType,
                     new ReadOnlyMemory<byte>(responsePayload, 0, respLen));
             }
@@ -632,22 +650,13 @@ public sealed class CeleriantClient : ICeleriantClient
     /// Synchronous send-request/receive-response for maximum throughput.
     /// No lock, no CTS, no async overhead. Caller must ensure single-threaded access.
     /// </summary>
-    public ClientResponse SendRequest(ClientRequest request, CompressionType compression = CompressionType.None)
+    public ClientResponse SendRequest(ClientRequest request)
     {
         (uint messageTypeId, byte[] serialized, bool isVariableSize) = SerializeRequest(request);
 
-        byte[] payload = serialized;
-        uint compressedLength = (uint)serialized.Length;
-        uint uncompressedLength = compressedLength;
-
-        CompressionType effectiveCompression = CompressionType.None;
-        if (isVariableSize && compression != CompressionType.None)
-        {
-            uncompressedLength = compressedLength;
-            payload = WireCodec.Compress(serialized, compression);
-            compressedLength = (uint)payload.Length;
-            effectiveCompression = compression;
-        }
+        (CompressionType effectiveCompression, byte[] payload, uint uncompressedLength) =
+            PrepareRequestBody(request, serialized, isVariableSize);
+        uint compressedLength = (uint)payload.Length;
 
         WireHeader header = effectiveCompression == CompressionType.None
             ? WireHeader.ForRequest(messageTypeId, compressedLength)
@@ -681,12 +690,11 @@ public sealed class CeleriantClient : ICeleriantClient
             {
                 ReadExactSync(responsePayload.AsSpan(0, respLen));
 
-                if (responseHeader.CompressedLength != responseHeader.UncompressedLength)
+                if ((CompressionType)responseHeader.CompressionType != CompressionType.None)
                 {
-                    var responseCompression = (CompressionType)responseHeader.CompressionType;
                     // Decompress needs its own byte[] — only happens for compressed responses
                     byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
-                    byte[] decompressed = WireCodec.Decompress(compressed, responseCompression, responseHeader.UncompressedLength);
+                    byte[] decompressed = DecompressResponse(responseHeader, compressed);
                     return DeserializeResponse(responseHeader.MessageType, decompressed);
                 }
 
@@ -706,6 +714,57 @@ public sealed class CeleriantClient : ICeleriantClient
         {
             throw new ConnectionFailedException("IO error during request.", ex);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Compression helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Choose compression for an outbound request and produce the frame body.
+    /// Only variable-size requests are eligible, only when a dictionary has been negotiated
+    /// and the request's logical payload meets <see cref="CompressionThresholdBytes"/>.
+    /// </summary>
+    private (CompressionType compression, byte[] payload, uint uncompressedLength) PrepareRequestBody(
+        ClientRequest request, byte[] serialized, bool isVariableSize)
+    {
+        if (_dict is { } dict && isVariableSize && PayloadBytes(request) >= CompressionThresholdBytes)
+        {
+            byte[] compressed = WireCodec.CompressWithDict(serialized, dict.Bytes);
+            return (CompressionType.ZstdDict, compressed, (uint)serialized.Length);
+        }
+
+        return (CompressionType.None, serialized, (uint)serialized.Length);
+    }
+
+    /// <summary>
+    /// Logical payload size used for the compression threshold decision — the event values
+    /// for a write, or the schema text for a schema registration. Mirrors the Rust client.
+    /// </summary>
+    private static long PayloadBytes(ClientRequest request) => request switch
+    {
+        ClientRequest.Write w => w.Value.Writes.Values
+            .SelectMany(static sw => sw.Events)
+            .Sum(static e => (long)(e.EventValue?.Length ?? 0)),
+        ClientRequest.RegisterSchema s => Encoding.UTF8.GetByteCount(s.Value.Schema),
+        _ => 0,
+    };
+
+    /// <summary>
+    /// Decompress a response frame according to its compression type.
+    /// </summary>
+    private byte[] DecompressResponse(WireHeader responseHeader, byte[] compressed)
+    {
+        var compression = (CompressionType)responseHeader.CompressionType;
+        return compression switch
+        {
+            CompressionType.None => compressed,
+            CompressionType.ZstdDict when _dict is { } dict
+                => WireCodec.DecompressWithDict(compressed, responseHeader.UncompressedLength, dict.Bytes),
+            CompressionType.ZstdDict
+                => throw new ProtocolException("Received a ZstdDict-compressed response but no dictionary is cached for this connection."),
+            _ => throw new ProtocolException($"Unknown compression type {(byte)compression} in response."),
+        };
     }
 
     private void ReadExactSync(Span<byte> buf)

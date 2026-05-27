@@ -24,13 +24,13 @@ public sealed class WatchResponseEvent
 
     [Key(4)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? FromEventBatchIndex { get; init; }
+    public long? FromAggregateVersion { get; init; }
 
     [Key(5)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? ToEventBatchIndex { get; init; }
+    public long? ToAggregateVersion { get; init; }
 
     [Key(6)]
     [MessagePackFormatter(typeof(NullableUInt64AsInt64Formatter))]
-    public long? KeepFromEventBatchIndex { get; init; }
+    public long? KeepFromAggregateVersion { get; init; }
 }

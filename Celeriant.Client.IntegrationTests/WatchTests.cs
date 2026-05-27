@@ -151,7 +151,7 @@ public sealed class WatchTests
 
         // Write another event
         await pool.WriteAsync(TestHelpers.SingleEventWrite(key, "pool-watch"u8.ToArray(),
-            clientEventIndex: 2, allowCreate: false));
+            clientSeq: 2, allowCreate: false));
 
         var writeEvent = await WaitForWatchEvent(watch, TimeSpan.FromSeconds(10),
             e => (e.Operation is WatchOperationType.Write or WatchOperationType.Create)
@@ -183,7 +183,7 @@ public sealed class WatchTests
                 [key] = new SingleAggregateDelete
                 {
                     AllowRecreate = false,
-                    ExpectedEventBatchIndex = details.MaxEventBatchIndex,
+                    ExpectedVersion = details.MaxAggregateVersion,
                 }
             }
         });
@@ -217,11 +217,11 @@ public sealed class WatchTests
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static AggregateEvent MakeEvent(long clientEventIndex = 1, string payload = "test") =>
+    private static AggregateEvent MakeEvent(long clientSeq = 1, string payload = "test") =>
         new()
         {
-            ClientEventIndex = clientEventIndex,
-            EventIndex = 0,
+            ClientSeq = clientSeq,
+            EventSeq = 0,
             EventTimestamp = DateTimeOffset.UtcNow,
             EventTypeMajor = 1,
             EventTypeMinor = 0,

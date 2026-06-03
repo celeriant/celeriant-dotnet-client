@@ -84,6 +84,7 @@ public sealed class ErrorResponse
     public const uint WatchReadIo = 8002;
     public const uint WatchReadSerialization = 8003;
     public const uint WatchReadOther = 8004;
+    public const uint WatchTooManySubscribers = 8005;
 
     // --- Shard routing errors: 9xxx ---
     public const uint ShardRoutingNoKey = 9000;

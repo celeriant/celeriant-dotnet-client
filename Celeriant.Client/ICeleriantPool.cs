@@ -115,7 +115,7 @@ public interface ICeleriantPool : IAsyncDisposable
         CancellationToken ct = default);
 
     /// <summary>Open a dedicated watch connection (not pooled).</summary>
-    /// <exception cref="Errors.WatchErrorException">The watch request was invalid or the requested latency is too high.</exception>
+    /// <exception cref="Errors.WatchErrorException">The watch request was invalid, the requested latency is too high, or the server has too many subscribers.</exception>
     /// <exception cref="Errors.ConnectionFailedException">No reachable node could be found.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The connection or handshake timed out.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>

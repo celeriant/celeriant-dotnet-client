@@ -115,6 +115,7 @@ internal static class ErrorExceptionFactory
             // --- Watch errors (8xxx) ---
             ErrorResponse.WatchRequestInvalid
                 or ErrorResponse.WatchLatencyTooHigh
+                or ErrorResponse.WatchTooManySubscribers
                 => new WatchErrorException(error),
             ErrorResponse.WatchReadIo
                 or ErrorResponse.WatchReadSerialization

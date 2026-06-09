@@ -15,7 +15,7 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>Celeriant.Client</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>Celeriant</Authors>
     <Description>Official .NET client for Celeriant. An append-only event store for the write side of CQRS</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

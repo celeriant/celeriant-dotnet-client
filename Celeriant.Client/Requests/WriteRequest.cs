@@ -13,7 +13,7 @@ public sealed class WriteRequest
 
     [Key(1)]
     [MessagePackFormatter(typeof(CeleriantGuidFormatter))]
-    public Guid ClientId { get; init; }
+    public required Guid ClientId { get; init; }
 
     [Key(2)]
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]

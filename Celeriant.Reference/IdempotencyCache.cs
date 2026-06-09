@@ -8,30 +8,25 @@ namespace Celeriant.Reference;
 public readonly record struct IdempotencyEntry(long BalanceCents, long AggregateVersion);
 
 /// <summary>
-/// Per-instance idempotency cache keyed by <c>(eventId, aggregateId)</c> with a 90-second TTL
-/// and lazy eviction.
+/// Per-instance cache with a 90-second TTL and lazy eviction. Two maps:
 ///
-/// <para>Populated from two sources:</para>
-/// <list type="bullet">
-///   <item>the write path after a successful write — in-instance retries hit immediately;</item>
-///   <item><see cref="AccountService.CatchUpAsync"/>, which reconstructs the outcome for any replayed
-///   event that carries an <c>event_id</c>. This warms cold instances after a BFF crash so a retried
-///   <c>Idempotency-Key</c> can be resolved without re-writing.</item>
-/// </list>
+/// <para><c>(eventId, aggregateId) -> outcome</c> restores the lost response for a retried
+/// request. Not a correctness layer; server-side CEI is the dedup.</para>
 ///
-/// <para>
-/// Not a correctness layer. The server's <c>enforce_client_idempotency</c> (CEI), keyed by
-/// <c>(client_id, aggregate_key, client_seq)</c>, is the underlying dedup. This cache only shortens
-/// the cross-instance recovery path for the BFF-crash-after-fsync case.
-/// </para>
+/// <para><c>(aggregateId, clientSeq) -> eventId</c> IS load-bearing. Requests share the
+/// service's client id, so two can derive the same clientSeq; if the loser's OCC rejection
+/// is lost to a timeout, its retry gets an IdempotencyViolation that refers to the sibling's
+/// event. This map is how the violation arm tells "mine" from "theirs" before claiming
+/// success. Warmed during catch-up replay and on every successful write.</para>
 /// </summary>
 public sealed class IdempotencyCache
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(90);
 
     private readonly ConcurrentDictionary<(Guid EventId, Guid AggregateId), (IdempotencyEntry Entry, DateTimeOffset ExpiresAt)> _cache = new();
+    private readonly ConcurrentDictionary<(Guid AggregateId, long ClientSeq), (Guid EventId, DateTimeOffset ExpiresAt)> _seqOwners = new();
 
-    /// <summary>How recent a replayed event must be (by server timestamp) for catch-up to warm the cache.</summary>
+    /// <summary>How recent a replayed event must be (relative to the tip of the read, in server time) for catch-up to warm the cache.</summary>
     public static TimeSpan WarmWindow => Ttl;
 
     public bool TryGet(Guid eventId, Guid aggregateId, out IdempotencyEntry entry)
@@ -52,6 +47,20 @@ public sealed class IdempotencyCache
         _cache[(eventId, aggregateId)] = (entry, DateTimeOffset.UtcNow + Ttl);
     }
 
+    /// <summary>Which eventId landed on this (aggregate, clientSeq)? Null = unknown.</summary>
+    public Guid? SeqOwner(Guid aggregateId, long clientSeq)
+    {
+        Evict();
+        if (_seqOwners.TryGetValue((aggregateId, clientSeq), out var hit) && hit.ExpiresAt > DateTimeOffset.UtcNow)
+            return hit.EventId;
+        return null;
+    }
+
+    public void SetSeqOwner(Guid aggregateId, long clientSeq, Guid eventId)
+    {
+        _seqOwners[(aggregateId, clientSeq)] = (eventId, DateTimeOffset.UtcNow + Ttl);
+    }
+
     private void Evict()
     {
         var now = DateTimeOffset.UtcNow;
@@ -59,6 +68,11 @@ public sealed class IdempotencyCache
         {
             if (kvp.Value.ExpiresAt <= now)
                 _cache.TryRemove(kvp.Key, out _);
+        }
+        foreach (var kvp in _seqOwners)
+        {
+            if (kvp.Value.ExpiresAt <= now)
+                _seqOwners.TryRemove(kvp.Key, out _);
         }
     }
 }

@@ -15,7 +15,7 @@ public abstract record ClientResponse
 
     public sealed record AggregateDetails(AggregateDetailsResponse Value) : ClientResponse;
     public sealed record Read(ReadResponse Value) : ClientResponse;
-    public sealed record Write(SuccessResponse Value) : ClientResponse;
+    public sealed record Write(WriteResponse Value) : ClientResponse;
     public sealed record TrimStart(SuccessResponse Value) : ClientResponse;
     public sealed record Delete(SuccessResponse Value) : ClientResponse;
     public sealed record GenericError(ErrorResponse Value) : ClientResponse;

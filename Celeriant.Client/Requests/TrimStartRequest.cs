@@ -20,7 +20,7 @@ public sealed class TrimStartRequest
 
     [Key(3)]
     [MessagePackFormatter(typeof(CeleriantGuidFormatter))]
-    public Guid ClientId { get; init; }
+    public required Guid ClientId { get; init; }
 
     [Key(4)]
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]

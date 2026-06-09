@@ -86,11 +86,12 @@ public sealed class RpiClusterPoolBench
         // Smoke test
         Console.WriteLine("--- Smoke test ---");
         var smokeKey = new AggregateKey(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var smokeClientId = Guid.NewGuid();
         await pool.WriteAsync(smokeKey, [new AggregateEvent
         {
             EventTypeMajor = 1,
             EventValue = "smoke-test"u8.ToArray(),
-        }]);
+        }], smokeClientId);
         Console.WriteLine("  Write OK\n");
 
         // Throughput benchmark
@@ -154,6 +155,7 @@ public sealed class RpiClusterPoolBench
                 await barrier.Task;
                 var deadline = sw.Elapsed + TimeSpan.FromSeconds(durationSecs);
                 var seq = 0;
+                var clientId = Guid.NewGuid();
 
                 while (sw.Elapsed < deadline)
                 {
@@ -173,7 +175,7 @@ public sealed class RpiClusterPoolBench
                     var reqStart = sw.ElapsedMilliseconds;
                     try
                     {
-                        await pool.WriteAsync(key, [ev]);
+                        await pool.WriteAsync(key, [ev], clientId);
                         latencies.Add(sw.ElapsedMilliseconds - reqStart);
                         Interlocked.Increment(ref totalOk);
                     }

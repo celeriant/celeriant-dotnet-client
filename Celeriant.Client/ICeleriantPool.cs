@@ -42,7 +42,7 @@ public interface ICeleriantPool : IAsyncDisposable
     /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
-    Task<SuccessResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
+    Task<WriteResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
 
     /// <summary>Write events to a single aggregate. Routed to the leader with automatic failover.</summary>
     /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
@@ -53,10 +53,10 @@ public interface ICeleriantPool : IAsyncDisposable
     /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
-    Task<SuccessResponse> WriteAsync(
+    Task<WriteResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
-        Guid? clientId = null,
+        Guid clientId,
         bool allowCreate = true,
         long? expectedVersion = null,
         bool enforceClientIdempotency = false,

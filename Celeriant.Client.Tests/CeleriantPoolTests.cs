@@ -13,6 +13,7 @@ namespace Celeriant.Client.Tests;
 public class CeleriantPoolTests
 {
     private static readonly AggregateKey TestKey = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+    private static readonly Guid TestClientId = Guid.NewGuid();
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -53,7 +54,7 @@ public class CeleriantPoolTests
     };
 
     private static ClientResponse.Write SuccessWriteResponse()
-        => new(new SuccessResponse());
+        => new(new WriteResponse());
 
     private static ClientResponse.Read SuccessReadResponse()
         => new(new ReadResponse { EventBatches = [] });
@@ -463,6 +464,7 @@ public class CeleriantPoolTests
         await using var pool = CreatePool(MakeOptions(), mocks);
         var result = await pool.DeleteAsync(new DeleteRequest
         {
+            ClientId = TestClientId,
             Deletes = new Dictionary<AggregateKey, SingleAggregateDelete>
             {
                 [TestKey] = new()
@@ -486,6 +488,7 @@ public class CeleriantPoolTests
         await using var pool = CreatePool(MakeOptions(), mocks);
         var result = await pool.TrimStartAsync(new TrimStartRequest
         {
+            ClientId = TestClientId,
             AggregateKey = TestKey,
             KeepFromAggregateVersion = 5,
         });
@@ -511,6 +514,7 @@ public class CeleriantPoolTests
         await using var pool = CreatePool(MakeOptions(), mocks);
         var result = await pool.RegisterSchemaAsync(new RegisterSchemaRequest
         {
+            ClientId = TestClientId,
             SchemaKey = new SchemaKey(TestKey.OrgId, TestKey.AggregateTypeId, 1, 0),
             Schema = "{}",
         });
@@ -580,7 +584,7 @@ public class CeleriantPoolTests
 
         await using var pool = CreatePool(MakeOptions(), mocks);
         var events = new[] { MakeEvent() };
-        await pool.WriteAsync(TestKey, events);
+        await pool.WriteAsync(TestKey, events, TestClientId);
 
         Assert.NotNull(captured);
         var writeReq = Assert.IsType<ClientRequest.Write>(captured);

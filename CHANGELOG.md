@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-10
+
+### Changed
+
+- **Breaking:** `WriteAsync` now returns `WriteResponse` instead of `SuccessResponse`. `WriteResponse` exposes `MaxAggregateVersion` (the highest aggregate version committed, populated only for single-aggregate writes) and `CorrelationId`.
+- **Breaking:** The `clientId` parameter on the single-aggregate `WriteAsync` overloads (`CeleriantClient` and `CeleriantPool`) is now a required `Guid` instead of an optional `Guid?` that defaulted to a fresh random GUID. A per-call random ID silently disabled client-seq idempotency; callers must now pass a stable ID per logical writer.
+- **Breaking:** `ClientId` is now `required` on `WriteRequest`, `DeleteRequest`, `TrimStartRequest`, and `RegisterSchemaRequest`.
+
+## [0.3.0] - 2026-06-04
+
+### Added
+
+- `WatchErrorException` and the `WatchTooManySubscribers` error — surfaced when the server rejects a watch subscription because the per-aggregate subscriber limit is exceeded.
+
 ## [0.2.0] - 2026-03-25
 
 ### Added

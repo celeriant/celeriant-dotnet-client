@@ -152,7 +152,7 @@ public sealed class CeleriantPool : ICeleriantPool
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
     /// <exception cref="ProtocolException">The server returned an unexpected response type.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
-    public Task<SuccessResponse> WriteAsync(
+    public Task<WriteResponse> WriteAsync(
         WriteRequest request,
         CancellationToken ct = default)
         => ExecuteLeaderOperationAsync(
@@ -173,24 +173,25 @@ public sealed class CeleriantPool : ICeleriantPool
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
     /// <param name="key">The aggregate to write to.</param>
     /// <param name="events">One or more events to append.</param>
-    /// <param name="clientId">Client ID for idempotency. Defaults to a new random GUID.</param>
+    /// <param name="clientId">Client ID scoping client-seq idempotency. Use a stable ID per
+    /// logical writer — never a fresh random value per call, or idempotency silently stops working.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
     /// <param name="expectedVersion">If set, the server rejects the write unless the aggregate's
     /// current max event batch index matches this value (optimistic concurrency control).</param>
     /// <param name="enforceClientIdempotency">When <c>true</c>, the server rejects duplicate writes
     /// that share the same <paramref name="clientId"/> and client event index.</param>
     /// <param name="ct">Cancellation token.</param>
-    public Task<SuccessResponse> WriteAsync(
+    public Task<WriteResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
-        Guid? clientId = null,
+        Guid clientId,
         bool allowCreate = true,
         long? expectedVersion = null,
         bool enforceClientIdempotency = false,
         CancellationToken ct = default)
         => WriteAsync(new WriteRequest
         {
-            ClientId = clientId ?? Guid.NewGuid(),
+            ClientId = clientId,
             Writes = new Dictionary<AggregateKey, SingleAggregateWrite>
             {
                 [key] = new SingleAggregateWrite

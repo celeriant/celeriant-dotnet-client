@@ -41,8 +41,9 @@ public sealed class StreamingTests
     public async Task ReadAllAsync_SingleBatch_YieldsAllEvents()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
         var payload = "streaming-single"u8.ToArray();
-        await Client.WriteAsync(key, [MakeEvent(1, payload)]);
+        await Client.WriteAsync(key, [MakeEvent(1, payload)], clientId);
 
         var batches = new List<AggregateEventBatch>();
         await foreach (var batch in Client.ReadAllAsync(key))
@@ -58,12 +59,13 @@ public sealed class StreamingTests
     public async Task ReadAllAsync_MultipleBatches_CollectsAll()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         // Write 5 separate batches
         for (int i = 1; i <= 5; i++)
         {
             var payload = Encoding.UTF8.GetBytes($"batch-{i}");
-            await Client.WriteAsync(key, [MakeEvent(i, payload)], allowCreate: i == 1);
+            await Client.WriteAsync(key, [MakeEvent(i, payload)], clientId, allowCreate: i == 1);
         }
 
         var allEvents = new List<AggregateEvent>();
@@ -83,10 +85,11 @@ public sealed class StreamingTests
     public async Task ReadAllAsync_WithFromFilter_SkipsEarlierBatches()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         // Write 3 batches
         for (int i = 1; i <= 3; i++)
-            await Client.WriteAsync(key, [MakeEvent(i, $"batch-{i}")], allowCreate: i == 1);
+            await Client.WriteAsync(key, [MakeEvent(i, $"batch-{i}")], clientId, allowCreate: i == 1);
 
         // Read from batch index 2 onwards
         var events = new List<AggregateEvent>();
@@ -103,9 +106,10 @@ public sealed class StreamingTests
     public async Task ReadAllAsync_Cancellation_StopsEnumeration()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         for (int i = 1; i <= 3; i++)
-            await Client.WriteAsync(key, [MakeEvent(i, $"cancel-{i}")], allowCreate: i == 1);
+            await Client.WriteAsync(key, [MakeEvent(i, $"cancel-{i}")], clientId, allowCreate: i == 1);
 
         using var cts = new CancellationTokenSource();
         var count = 0;
@@ -172,10 +176,11 @@ public sealed class StreamingTests
         var orgId = Guid.NewGuid();
         var typeId = Guid.NewGuid();
         var key = new AggregateKey(orgId, typeId, Guid.NewGuid());
+        var clientId = Guid.NewGuid();
 
         // Write 2 batches
-        await Client.WriteAsync(key, [MakeEvent(1, "stats-1")]);
-        await Client.WriteAsync(key, [MakeEvent(2, "stats-2")], allowCreate: false);
+        await Client.WriteAsync(key, [MakeEvent(1, "stats-1")], clientId);
+        await Client.WriteAsync(key, [MakeEvent(2, "stats-2")], clientId, allowCreate: false);
 
         var stats = new List<AggregateStats>();
         await foreach (var item in Client.ListAggregatesAsync(orgId: orgId, aggregateTypeId: typeId))

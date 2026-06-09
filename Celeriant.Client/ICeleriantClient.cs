@@ -26,7 +26,7 @@ public interface ICeleriantClient : IAsyncDisposable
     /// <exception cref="Errors.NotLeaderException">The target node is not the leader. Retry against <see cref="Errors.NotLeaderException.LeaderAddress"/>.</exception>
     /// <exception cref="Errors.ConnectionFailedException">The connection was lost.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
-    Task<SuccessResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
+    Task<WriteResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
 
     /// <summary>Write events to a single aggregate. Creates the aggregate if it does not exist.</summary>
     /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
@@ -37,10 +37,10 @@ public interface ICeleriantClient : IAsyncDisposable
     /// <exception cref="Errors.NotLeaderException">The target node is not the leader. Retry against <see cref="Errors.NotLeaderException.LeaderAddress"/>.</exception>
     /// <exception cref="Errors.ConnectionFailedException">The connection was lost.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
-    Task<SuccessResponse> WriteAsync(
+    Task<WriteResponse> WriteAsync(
         AggregateKey key,
         AggregateEvent[] events,
-        Guid? clientId = null,
+        Guid clientId,
         bool allowCreate = true,
         long? expectedVersion = null,
         bool enforceClientIdempotency = false,

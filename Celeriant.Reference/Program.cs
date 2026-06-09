@@ -102,7 +102,7 @@ app.MapPost("/api/accounts/{accountId}/deposit", async (
     AccountService svc,
     CancellationToken ct) =>
 {
-    var eventId = ParseIdempotencyKey(httpContext);
+    var eventId = RequestEventId(httpContext);
 
     try
     {
@@ -135,7 +135,7 @@ app.MapPost("/api/accounts/{accountId}/withdraw", async (
     AccountService svc,
     CancellationToken ct) =>
 {
-    var eventId = ParseIdempotencyKey(httpContext);
+    var eventId = RequestEventId(httpContext);
 
     try
     {
@@ -176,7 +176,7 @@ app.MapPost("/api/transfers", async (
     AccountService svc,
     CancellationToken ct) =>
 {
-    var eventId = ParseIdempotencyKey(httpContext);
+    var eventId = RequestEventId(httpContext);
 
     try
     {
@@ -257,15 +257,15 @@ app.Run();
 
 // ─────────────────── Idempotency helpers ───────────────────
 
-// The frontend sends a stable Idempotency-Key (UUID) per user intent. We plumb it through as the
-// event_id on the WriteRequest; the server uses it for an extra dedup layer, and AccountService
-// warms its (event_id, aggregate_id) cache from catch-up so retries on a cold instance resolve
-// without writing duplicates. Returns null when the header is absent or not a UUID.
-static Guid? ParseIdempotencyKey(HttpContext context)
+// The Idempotency-Key header as a Guid, or a freshly minted one. It becomes the event_id
+// on the write. A caller-supplied key makes HTTP retries resolvable without re-writing;
+// any key, minted or not, is what lets an IdempotencyViolation be verified as ours rather
+// than a sibling's.
+static Guid RequestEventId(HttpContext context)
     => context.Request.Headers.TryGetValue("Idempotency-Key", out var header)
        && Guid.TryParse(header.ToString(), out var key)
         ? key
-        : null;
+        : Guid.NewGuid();
 
 // ─────────────────── Database init ───────────────────
 

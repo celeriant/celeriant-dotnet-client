@@ -41,16 +41,17 @@ public sealed class WatchTests
     public async Task Watch_ReceivesWriteEvents()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         // Create the aggregate first so the server knows the shard
-        await Client.WriteAsync(key, [MakeEvent(1, "setup")]);
+        await Client.WriteAsync(key, [MakeEvent(1, "setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         await using var watch = await WatchConnection.ConnectAsync(
             Address, watchRequest, new WatchOptions());
 
         // Write another event
-        await Client.WriteAsync(key, [MakeEvent(2, "watched-event")], allowCreate: false);
+        await Client.WriteAsync(key, [MakeEvent(2, "watched-event")], clientId, allowCreate: false);
 
         var writeEvent = await WaitForWatchEvent(watch, TimeSpan.FromSeconds(10),
             e => e.Operation is WatchOperationType.Write or WatchOperationType.Create);
@@ -63,7 +64,8 @@ public sealed class WatchTests
     public async Task Watch_NextAsyncWithTimeout_ReturnsNullOnExpiry()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "timeout-setup")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "timeout-setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         await using var watch = await WatchConnection.ConnectAsync(
@@ -81,7 +83,8 @@ public sealed class WatchTests
     public async Task Watch_Dispose_DoesNotThrow()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "dispose-setup")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "dispose-setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         var watch = await WatchConnection.ConnectAsync(
@@ -96,7 +99,8 @@ public sealed class WatchTests
     public async Task Watch_AfterDispose_ThrowsObjectDisposedException()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "disposed-setup")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "disposed-setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         var watch = await WatchConnection.ConnectAsync(
@@ -110,9 +114,10 @@ public sealed class WatchTests
     public async Task Watch_MultipleWriteEvents_AllReceived()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         // Create the aggregate
-        await Client.WriteAsync(key, [MakeEvent(1, "setup")]);
+        await Client.WriteAsync(key, [MakeEvent(1, "setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         await using var watch = await WatchConnection.ConnectAsync(
@@ -120,7 +125,7 @@ public sealed class WatchTests
 
         // Write 3 more batches
         for (int i = 2; i <= 4; i++)
-            await Client.WriteAsync(key, [MakeEvent(i, $"event-{i}")], allowCreate: false);
+            await Client.WriteAsync(key, [MakeEvent(i, $"event-{i}")], clientId, allowCreate: false);
 
         // Collect watch events
         var events = await CollectWatchEvents(watch, TimeSpan.FromSeconds(10), minCount: 3);
@@ -164,9 +169,10 @@ public sealed class WatchTests
     public async Task Watch_DeleteEvent_Received()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
 
         // Create aggregate
-        await Client.WriteAsync(key, [MakeEvent()]);
+        await Client.WriteAsync(key, [MakeEvent()], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         await using var watch = await WatchConnection.ConnectAsync(
@@ -198,7 +204,8 @@ public sealed class WatchTests
     public async Task Watch_Cancellation_StopsPolling()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "cancel-setup")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "cancel-setup")], clientId);
 
         var watchRequest = new WatchRequest { Aggregates = new HashSet<Guid> { key.AggregateId } };
         await using var watch = await WatchConnection.ConnectAsync(

@@ -91,19 +91,19 @@ public sealed class AccountService(
             return new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq);
         }
 
-        // Step 3: Replay new events — update balance, track maxClientSeq, and warm the
-        // idempotency cache from any recent event that carries an event_id (so a retry
-        // hitting a cold instance after a crash resolves without writing a duplicate).
+        // Step 3: Replay new events — update balance, track maxClientSeq, warm the caches.
+        // Warm-window aging is batch-vs-tip in server time; mixing in the local clock
+        // would let skew silently disable warming.
         var newBalance = balanceCents;
         long newBatchIndex = lastBatchIndex;
-        var now = DateTimeOffset.UtcNow;
+        var tipTs = response.EventBatches[^1].ServerTimestamp;
         var warmWindow = IdempotencyCache.WarmWindow;
 
         foreach (var batch in response.EventBatches)
         {
             newBatchIndex = batch.AggregateVersion;
             var trackClientSeq = batch.ClientId == Constants.ServiceClientId;
-            var warmCache = now - batch.ServerTimestamp < warmWindow;
+            var warmCache = tipTs - batch.ServerTimestamp < warmWindow;
 
             foreach (var evt in batch.Events)
             {
@@ -113,7 +113,12 @@ public sealed class AccountService(
                 newBalance = ReplayEvent(newBalance, evt);
 
                 if (warmCache && evt.EventId is { } eid)
+                {
                     idempotency.Set(eid, accountId, new IdempotencyEntry(newBalance, batch.AggregateVersion));
+                    // Record the seq's owner so an IdempotencyViolation can be verified.
+                    if (trackClientSeq)
+                        idempotency.SetSeqOwner(accountId, evt.ClientSeq, eid);
+                }
             }
         }
 
@@ -124,7 +129,8 @@ public sealed class AccountService(
                 INSERT INTO account_balances (account_id, account_name, balance_cents, last_batch_index, last_client_event_index, updated_at)
                 VALUES (@id, @name, @balance, @batchIndex, @clientSeq, now())
                 ON CONFLICT (account_id) DO UPDATE
-                SET balance_cents = @balance, account_name = @name,
+                SET balance_cents = @balance,
+                    account_name = COALESCE(NULLIF(@name, ''), account_balances.account_name),
                     last_batch_index = @batchIndex, last_client_event_index = @clientSeq, updated_at = now()
                 WHERE account_balances.last_batch_index < @batchIndex");
             cmd.Parameters.AddWithValue("id", accountId);
@@ -188,11 +194,16 @@ public sealed class AccountService(
                     ct: ct);
 
                 var newBatchIndex = projection.LastBatchIndex + 1;
+                // Caches before the projection bump: the bump kills the replay path
+                // for same-key siblings, so the cache must already answer by then.
+                if (eventId is { } seid)
+                {
+                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
+                    idempotency.SetSeqOwner(accountId, clientSeq, seid);
+                }
+
                 await UpdateProjectionOptimistically(accountId, projection.AccountName,
                     newBalance, newBatchIndex, projection.LastBatchIndex, clientSeq, ct);
-
-                if (eventId is { } seid)
-                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
 
                 return new WriteResult(newBalance, newBatchIndex);
             }
@@ -218,13 +229,31 @@ public sealed class AccountService(
             }
             catch (IdempotencyViolationException)
             {
-                // A prior attempt with the same clientSeq already landed (K-FAIL recovery).
-                // Catch-up warms the cache from event_id when it matches.
-                logger.LogInformation("Idempotency hit on deposit for {AccountId} — prior attempt landed", accountId);
+                // Someone landed this clientSeq: our timed-out prior attempt, or a sibling
+                // request that derived the same number. Verify before claiming success;
+                // a false "done" silently drops the deposit.
                 var p = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } veid && idempotency.TryGet(veid, accountId, out var vhit))
-                    return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
-                return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                if (eventId is { } veid)
+                {
+                    if (idempotency.TryGet(veid, accountId, out var vhit))
+                        return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
+
+                    var owner = idempotency.SeqOwner(accountId, clientSeq);
+                    if (owner == veid)
+                    {
+                        logger.LogInformation("Idempotency hit on deposit for {AccountId} — prior attempt landed", accountId);
+                        return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                    }
+                    if (owner is not null)
+                    {
+                        // A sibling took the seq; our event never landed.
+                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling — re-deriving", clientSeq, accountId);
+                        reDeriveCei = true;
+                        continue;
+                    }
+                }
+                // Unknown ownership: refuse to guess.
+                throw new OccExhaustedException("Deposit state unverifiable after idempotency violation — retry the request.");
             }
         }
 
@@ -282,11 +311,15 @@ public sealed class AccountService(
                     ct: ct);
 
                 var newBatchIndex = projection.LastBatchIndex + 1;
+                // Caches before the projection bump, as in deposit.
+                if (eventId is { } seid)
+                {
+                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
+                    idempotency.SetSeqOwner(accountId, clientSeq, seid);
+                }
+
                 await UpdateProjectionOptimistically(accountId, projection.AccountName,
                     newBalance, newBatchIndex, projection.LastBatchIndex, clientSeq, ct);
-
-                if (eventId is { } seid)
-                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
 
                 return new WriteResult(newBalance, newBatchIndex);
             }
@@ -308,11 +341,27 @@ public sealed class AccountService(
             }
             catch (IdempotencyViolationException)
             {
-                logger.LogInformation("Idempotency hit on withdraw for {AccountId} — prior attempt landed", accountId);
+                // Same verification as deposit.
                 var p = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } veid && idempotency.TryGet(veid, accountId, out var vhit))
-                    return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
-                return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                if (eventId is { } veid)
+                {
+                    if (idempotency.TryGet(veid, accountId, out var vhit))
+                        return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
+
+                    var owner = idempotency.SeqOwner(accountId, clientSeq);
+                    if (owner == veid)
+                    {
+                        logger.LogInformation("Idempotency hit on withdraw for {AccountId} — prior attempt landed", accountId);
+                        return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                    }
+                    if (owner is not null)
+                    {
+                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling — re-deriving", clientSeq, accountId);
+                        reDeriveCei = true;
+                        continue;
+                    }
+                }
+                throw new OccExhaustedException("Withdrawal state unverifiable after idempotency violation — retry the request.");
             }
         }
 
@@ -407,16 +456,19 @@ public sealed class AccountService(
                 var newFromBatch = fromProjection.LastBatchIndex + 1;
                 var newToBatch = toProjection.LastBatchIndex + 1;
 
-                await UpdateProjectionOptimistically(fromAccountId, fromProjection.AccountName,
-                    newFromBalance, newFromBatch, fromProjection.LastBatchIndex, fromClientSeq, ct);
-                await UpdateProjectionOptimistically(toAccountId, toProjection.AccountName,
-                    newToBalance, newToBatch, toProjection.LastBatchIndex, toClientSeq, ct);
-
+                // Caches before the projection bumps, as in deposit.
                 if (eventId is { } seid)
                 {
                     idempotency.Set(seid, fromAccountId, new IdempotencyEntry(newFromBalance, newFromBatch));
                     idempotency.Set(seid, toAccountId, new IdempotencyEntry(newToBalance, newToBatch));
+                    idempotency.SetSeqOwner(fromAccountId, fromClientSeq, seid);
+                    idempotency.SetSeqOwner(toAccountId, toClientSeq, seid);
                 }
+
+                await UpdateProjectionOptimistically(fromAccountId, fromProjection.AccountName,
+                    newFromBalance, newFromBatch, fromProjection.LastBatchIndex, fromClientSeq, ct);
+                await UpdateProjectionOptimistically(toAccountId, toProjection.AccountName,
+                    newToBalance, newToBatch, toProjection.LastBatchIndex, toClientSeq, ct);
 
                 return new TransferResult(
                     new WriteResult(newFromBalance, newFromBatch),
@@ -443,14 +495,35 @@ public sealed class AccountService(
             }
             catch (IdempotencyViolationException)
             {
-                logger.LogInformation("Idempotency hit on transfer — prior attempt landed");
+                // At least one leg's clientSeq was consumed: our prior transfer, or a
+                // sibling's write on either account. Verify.
                 fromProjection = await CatchUpAsync(fromAccountId, ct: ct);
                 toProjection = await CatchUpAsync(toAccountId, ct: ct);
                 if (CachedTransfer(eventId, fromAccountId, toAccountId) is { } vhit)
                     return vhit;
-                return new TransferResult(
-                    new WriteResult(fromProjection.BalanceCents, fromProjection.LastBatchIndex),
-                    new WriteResult(toProjection.BalanceCents, toProjection.LastBatchIndex));
+
+                if (eventId is { } veid)
+                {
+                    var fromOwner = idempotency.SeqOwner(fromAccountId, fromClientSeq);
+                    var toOwner = idempotency.SeqOwner(toAccountId, toClientSeq);
+
+                    if ((fromOwner is not null && fromOwner != veid) || (toOwner is not null && toOwner != veid))
+                    {
+                        logger.LogInformation("Transfer clientSeq taken by a sibling — re-deriving");
+                        reDeriveCei = true;
+                        continue;
+                    }
+                    // The write is all-or-nothing: owning either leg proves the whole
+                    // transfer landed.
+                    if (fromOwner == veid || toOwner == veid)
+                    {
+                        logger.LogInformation("Idempotency hit on transfer — prior attempt landed");
+                        return new TransferResult(
+                            new WriteResult(fromProjection.BalanceCents, fromProjection.LastBatchIndex),
+                            new WriteResult(toProjection.BalanceCents, toProjection.LastBatchIndex));
+                    }
+                }
+                throw new OccExhaustedException("Transfer state unverifiable after idempotency violation — retry the request.");
             }
         }
 

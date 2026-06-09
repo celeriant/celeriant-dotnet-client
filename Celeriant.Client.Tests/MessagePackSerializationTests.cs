@@ -539,6 +539,28 @@ public class MessagePackSerializationTests
     }
 
     // -----------------------------------------------------------------------
+    // WriteResponse
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void WriteResponse_RoundTrip()
+    {
+        var resp = new WriteResponse { CorrelationId = CorrelationId, MaxAggregateVersion = 42 };
+        var result = RoundTrip(resp);
+        Assert.Equal(CorrelationId, result.CorrelationId);
+        Assert.Equal(42L, result.MaxAggregateVersion);
+    }
+
+    [Fact]
+    public void WriteResponse_NullMaxAggregateVersion_RoundTrip()
+    {
+        var resp = new WriteResponse { CorrelationId = null, MaxAggregateVersion = null };
+        var result = RoundTrip(resp);
+        Assert.Null(result.CorrelationId);
+        Assert.Null(result.MaxAggregateVersion);
+    }
+
+    // -----------------------------------------------------------------------
     // ErrorResponse
     // -----------------------------------------------------------------------
 

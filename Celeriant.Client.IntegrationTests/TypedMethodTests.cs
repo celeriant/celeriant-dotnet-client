@@ -43,9 +43,10 @@ public sealed class TypedMethodTests
     public async Task WriteAsync_ConvenienceOverload_CreatesAggregate()
     {
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
         var payload = "convenience-write"u8.ToArray();
 
-        var result = await Client.WriteAsync(key, [MakeEvent(1, payload)]);
+        var result = await Client.WriteAsync(key, [MakeEvent(1, payload)], clientId);
 
         Assert.NotNull(result);
 
@@ -67,7 +68,8 @@ public sealed class TypedMethodTests
     public async Task ReadAsync_ReturnsTypedResponse()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "typed-read")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "typed-read")], clientId);
 
         var response = await Client.ReadAsync(new ReadRequest
         {
@@ -99,7 +101,8 @@ public sealed class TypedMethodTests
     public async Task AggregateDetailsAsync_ReturnsTypedResponse()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "typed-details")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "typed-details")], clientId);
 
         var details = await Client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
@@ -124,7 +127,8 @@ public sealed class TypedMethodTests
     public async Task DeleteAsync_ReturnsTypedResponse()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "typed-delete")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "typed-delete")], clientId);
 
         var details = await Client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
@@ -153,8 +157,9 @@ public sealed class TypedMethodTests
     public async Task TrimStartAsync_ReturnsTypedResponse()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "trim-1")]);
-        await Client.WriteAsync(key, [MakeEvent(2, "trim-2")], allowCreate: false);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "trim-1")], clientId);
+        await Client.WriteAsync(key, [MakeEvent(2, "trim-2")], clientId, allowCreate: false);
 
         var details = await Client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
@@ -190,10 +195,12 @@ public sealed class TypedMethodTests
     public async Task RegisterSchemaAsync_ReturnsTypedResponse()
     {
         var key = TestHelpers.NewKey();
-        await Client.WriteAsync(key, [MakeEvent(1, "schema-test")]);
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "schema-test")], clientId);
 
         var result = await Client.RegisterSchemaAsync(new RegisterSchemaRequest
         {
+            ClientId = clientId,
             SchemaKey = new SchemaKey(key.OrgId, key.AggregateTypeId, 1, 0),
             Schema = """{"type": "object", "properties": {"msg": {"type": "string"}}}""",
         });
@@ -213,7 +220,8 @@ public sealed class TypedMethodTests
             connectionTimeout: TimeSpan.FromSeconds(5));
 
         var key = TestHelpers.NewKey();
-        await client.WriteAsync(key, [MakeEvent(1, "timeout-test")]);
+        var clientId = Guid.NewGuid();
+        await client.WriteAsync(key, [MakeEvent(1, "timeout-test")], clientId);
 
         var details = await client.AggregateDetailsAsync(
             new AggregateDetailsRequest { AggregateKey = key });
@@ -244,10 +252,11 @@ public sealed class TypedMethodTests
         client.WithMaxRequestSize(100); // 100 bytes — tiny
 
         var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
         var largePayload = new byte[200];
 
         await Assert.ThrowsAsync<ArgumentException>(
-            () => client.WriteAsync(key, [MakeEvent(1, largePayload)]));
+            () => client.WriteAsync(key, [MakeEvent(1, largePayload)], clientId));
     }
 
     [SkippableFact]
@@ -257,7 +266,8 @@ public sealed class TypedMethodTests
         client.WithTimeout(TimeSpan.FromSeconds(10));
 
         var key = TestHelpers.NewKey();
-        await client.WriteAsync(key, [MakeEvent(1, "with-timeout")]);
+        var clientId = Guid.NewGuid();
+        await client.WriteAsync(key, [MakeEvent(1, "with-timeout")], clientId);
 
         var read = await client.ReadAsync(new ReadRequest
         {

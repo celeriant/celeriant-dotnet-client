@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-10
+
+### Fixed
+
+- Watch now subscribes once and reads server-pushed responses; previously each `NextAsync` re-sent the request as a long-poll (watch was always push — the server ignored the extra bytes). No API change.
+- Watch probe falls back to multi-shard on error 9002 (`ShardRoutingIncompatibleFilters`) as well as 9001; 9002 previously threw `CeleriantErrorException`.
+- Guide and `Celeriant.Reference`: on idempotency violation, point-read the contested `ClientSeq` and compare `EventId` before treating it as success — with a shared `ClientId` the seq may belong to a sibling's write.
+
 ## [0.4.0] - 2026-06-10
 
 ### Changed

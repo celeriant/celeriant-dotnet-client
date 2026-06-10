@@ -7,8 +7,9 @@ namespace Celeriant.Client.IntegrationTests;
 
 /// <summary>
 /// Integration tests for <see cref="WatchConnection"/> against a real Celeriant server.
-/// Watch is a long-poll protocol: events are forward-only (no backfill), and the server
-/// sends heartbeats (empty events) every ~5 seconds when idle.
+/// Watch is a push protocol: the client subscribes once and the server streams responses.
+/// Events are forward-only (no backfill), and the server sends heartbeats (empty events)
+/// every ~5 seconds when idle.
 ///
 /// The server requires at least one aggregate ID in the watch request (shards by aggregate).
 /// </summary>
@@ -58,6 +59,30 @@ public sealed class WatchTests
 
         Assert.NotNull(writeEvent);
         Assert.Equal(key.AggregateId, writeEvent.AggregateId);
+    }
+
+    [SkippableFact]
+    public async Task Watch_FilterMismatchesRoutingRule_FallsBackToMultiShard()
+    {
+        var key = TestHelpers.NewKey();
+        var clientId = Guid.NewGuid();
+        await Client.WriteAsync(key, [MakeEvent(1, "fallback-setup")], clientId);
+
+        // No Aggregates filter on an aggregate_id-routed server: the probe gets
+        // 9002 (IncompatibleFilters) and the client must fan out per shard.
+        var watchRequest = new WatchRequest
+        {
+            OperationTypes = new HashSet<WatchOperationType> { WatchOperationType.Write },
+        };
+        await using var watch = await WatchConnection.ConnectAsync(
+            Address, watchRequest, new WatchOptions());
+
+        await Client.WriteAsync(key, [MakeEvent(2, "fallback-event")], clientId, allowCreate: false);
+
+        var writeEvent = await WaitForWatchEvent(watch, TimeSpan.FromSeconds(10),
+            e => e.AggregateId == key.AggregateId && e.Operation == WatchOperationType.Write);
+
+        Assert.NotNull(writeEvent);
     }
 
     [SkippableFact]

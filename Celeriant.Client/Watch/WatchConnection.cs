@@ -13,8 +13,11 @@ namespace Celeriant.Client.Watch;
 /// <list type="number">
 ///   <item>
 ///     If <see cref="WatchOptions.MaxShardHint"/> is NOT set, open one connection without a
-///     <c>shard_id</c>. If the server returns error code 9001 with a <c>num_shards</c> value
-///     embedded in the error message JSON, automatically fall back to multi-shard mode.
+///     <c>shard_id</c>. If the server returns error code 9001 (filters route to multiple shards)
+///     or 9002 (filters do not match the routing rule) with a <c>num_shards</c> value embedded
+///     in the error message JSON, automatically fall back to multi-shard mode. An explicit
+///     <c>shard_id</c> bypasses the server's routing-rule check, so both cases are recoverable
+///     by fanning out one connection per shard.
 ///   </item>
 ///   <item>
 ///     If <see cref="WatchOptions.MaxShardHint"/> IS set, skip the single-connection probe and
@@ -30,18 +33,17 @@ namespace Celeriant.Client.Watch;
 /// </para>
 ///
 /// <para>
-/// Watch protocol notes: the wire protocol is request-response. For each NextAsync call the
-/// client sends the watch request again and the server responds with events accumulated since
-/// the last poll (or blocks until events are available, acting as a long-poll).
+/// Watch protocol notes: a watch is connection-terminal on the server. The client sends the
+/// watch request once; the server acks it immediately (an empty heartbeat-shaped frame) and
+/// pushes responses from then on. The server never reads the connection again, so anything
+/// the client writes after subscribing is silently ignored and just accumulates in the
+/// socket buffer. NextAsync only reads.
 /// </para>
 /// </summary>
 public sealed class WatchConnection : IAsyncDisposable
 {
-    private const uint ShardRoutingError = ErrorResponse.ShardRoutingMultipleShards;
-
     // Single-shard state.
     private CeleriantClient? _singleClient;
-    private WatchRequest? _singleRequest;
     // First response buffered during the probe handshake.
     private WatchResponse? _bufferedResponse;
 
@@ -173,7 +175,6 @@ public sealed class WatchConnection : IAsyncDisposable
         {
             await _singleClient.DisposeAsync().ConfigureAwait(false);
             _singleClient = null;
-            _singleRequest = null;
             _bufferedResponse = null;
         }
 
@@ -227,9 +228,13 @@ public sealed class WatchConnection : IAsyncDisposable
                 new ClientRequest.Watch(probeRequest), ct)
                 .ConfigureAwait(false);
         }
-        catch (CeleriantErrorException ex) when (ex.Error.ErrorCode == ShardRoutingError)
+        catch (CeleriantErrorException ex) when (
+            ex.Error.ErrorCode is ErrorResponse.ShardRoutingMultipleShards
+                               or ErrorResponse.ShardRoutingIncompatibleFilters)
         {
             // Server told us how many shards there are — fall back to multi-shard.
+            // Explicit shard_ids bypass the routing-rule check, so this recovers both
+            // multi-shard scopes (9001) and rule-mismatched filters (9002).
             await client.DisposeAsync().ConfigureAwait(false);
 
             long numShards = ParseNumShards(ex.Error.ErrorMessage);
@@ -255,28 +260,24 @@ public sealed class WatchConnection : IAsyncDisposable
             _bufferedResponse = watchResponse.Value;
         }
 
-        // Single-shard connected. Store client and request for subsequent NextAsync calls.
+        // Single-shard connected. The server pushes responses from here on.
         _singleClient = client;
-        _singleRequest = probeRequest;
     }
 
     private async Task<WatchResponse> ReadSingleShardResponseAsync(CancellationToken ct)
     {
-        // Each NextAsync re-sends the same watch request. The server acts as a long-poll:
-        // it responds once events are available (or times out and returns an empty batch).
-        // Heartbeats (empty events) are internal and are silently consumed here.
+        // The server pushes responses after the subscription; nothing is sent here.
+        // Heartbeats (empty events) are internal and are silently consumed.
         while (true)
         {
-            ClientResponse response = await _singleClient!.SendRequestAsync(
-                new ClientRequest.Watch(_singleRequest!), ct)
-                .ConfigureAwait(false);
+            ClientResponse response = await _singleClient!.ReadResponseAsync(ct).ConfigureAwait(false);
 
             if (response is ClientResponse.Watch watchResponse)
             {
                 if (watchResponse.Value.Events.Length > 0)
                     return watchResponse.Value;
 
-                // Heartbeat — re-poll.
+                // Heartbeat — keep reading.
                 continue;
             }
 
@@ -362,12 +363,13 @@ public sealed class WatchConnection : IAsyncDisposable
     {
         try
         {
+            // Subscribe once; the server pushes responses from here on.
+            ClientResponse response = await client.SendRequestAsync(
+                new ClientRequest.Watch(request), ct)
+                .ConfigureAwait(false);
+
             while (!ct.IsCancellationRequested)
             {
-                ClientResponse response = await client.SendRequestAsync(
-                    new ClientRequest.Watch(request), ct)
-                    .ConfigureAwait(false);
-
                 if (response is ClientResponse.Watch watchResponse)
                 {
                     // Skip heartbeats (empty events) — they are internal keep-alive signals.
@@ -380,6 +382,8 @@ public sealed class WatchConnection : IAsyncDisposable
                         $"Unexpected response type {response.GetType().Name} during shard watch."));
                     return;
                 }
+
+                response = await client.ReadResponseAsync(ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)

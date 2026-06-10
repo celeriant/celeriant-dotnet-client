@@ -529,39 +529,8 @@ public sealed class CeleriantClient : ICeleriantClient
             // 7-8. Write header + payload
             await SendHeaderAndPayloadAsync(header, payload, effectiveCt).ConfigureAwait(false);
 
-            // 9. Read 17-byte response header into pooled buffer
-            byte[] headerBuf = ArrayPool<byte>.Shared.Rent(WireHeader.Size);
-            await ReadExactIntoAsync(headerBuf, WireHeader.Size, effectiveCt).ConfigureAwait(false);
-            WireHeader responseHeader = WireHeader.ParseFrom(headerBuf);
-            ArrayPool<byte>.Shared.Return(headerBuf);
-
-            if (responseHeader.CompressedLength > _maxResponseSize)
-                throw new InvalidDataException(
-                    $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}.");
-
-            // 10. Read response payload into pooled buffer
-            int respLen = (int)responseHeader.CompressedLength;
-            byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
-            try
-            {
-                await ReadExactIntoAsync(responsePayload, respLen, effectiveCt).ConfigureAwait(false);
-
-                // 5. Decompress dictionary-compressed responses.
-                if ((CompressionType)responseHeader.CompressionType != CompressionType.None)
-                {
-                    byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
-                    byte[] decompressed = DecompressResponse(responseHeader, compressed);
-                    return DeserializeResponse(responseHeader.MessageType, decompressed);
-                }
-
-                // 6. Deserialize and map to ClientResponse
-                return DeserializeResponse(responseHeader.MessageType,
-                    new ReadOnlyMemory<byte>(responsePayload, 0, respLen));
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(responsePayload);
-            }
+            // 9-10. Read and deserialize the response
+            return await ReadResponseCoreAsync(effectiveCt).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (IsTimeoutCancellation(timeoutCts, ct))
         {
@@ -578,6 +547,64 @@ public sealed class CeleriantClient : ICeleriantClient
         finally
         {
             _sendLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Read a single server-pushed response without sending a request. Used by watch
+    /// connections, where the server streams responses after the initial subscription.
+    /// Blocks until a response arrives or <paramref name="ct"/> is cancelled.
+    /// </summary>
+    internal async Task<ClientResponse> ReadResponseAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await ReadResponseCoreAsync(ct).ConfigureAwait(false);
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new ConnectionFailedException("Connection closed during request.", ex);
+        }
+        catch (IOException ex)
+        {
+            throw new ConnectionFailedException("IO error during request.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Read one response frame (header + payload) and deserialize it.
+    /// </summary>
+    private async Task<ClientResponse> ReadResponseCoreAsync(CancellationToken ct)
+    {
+        byte[] headerBuf = ArrayPool<byte>.Shared.Rent(WireHeader.Size);
+        await ReadExactIntoAsync(headerBuf, WireHeader.Size, ct).ConfigureAwait(false);
+        WireHeader responseHeader = WireHeader.ParseFrom(headerBuf);
+        ArrayPool<byte>.Shared.Return(headerBuf);
+
+        if (responseHeader.CompressedLength > _maxResponseSize)
+            throw new InvalidDataException(
+                $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}.");
+
+        int respLen = (int)responseHeader.CompressedLength;
+        byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
+        try
+        {
+            await ReadExactIntoAsync(responsePayload, respLen, ct).ConfigureAwait(false);
+
+            // Decompress dictionary-compressed responses.
+            if ((CompressionType)responseHeader.CompressionType != CompressionType.None)
+            {
+                byte[] compressed = responsePayload.AsSpan(0, respLen).ToArray();
+                byte[] decompressed = DecompressResponse(responseHeader, compressed);
+                return DeserializeResponse(responseHeader.MessageType, decompressed);
+            }
+
+            return DeserializeResponse(responseHeader.MessageType,
+                new ReadOnlyMemory<byte>(responsePayload, 0, respLen));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(responsePayload);
         }
     }
 

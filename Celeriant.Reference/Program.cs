@@ -23,7 +23,6 @@ builder.Services.AddCeleriantPool(options =>
 });
 
 builder.Services.AddSingleton(NpgsqlDataSource.Create(postgresConnStr));
-builder.Services.AddSingleton<IdempotencyCache>();
 builder.Services.AddSingleton<WatchBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WatchBroadcaster>());
 builder.Services.AddScoped<AccountService>();
@@ -59,7 +58,7 @@ app.MapGet("/api/accounts/{accountId}/balance", async (
 {
     try
     {
-        var projection = await svc.CatchUpAsync(accountId, minBatchIndex, ct);
+        var (projection, _) = await svc.CatchUpAsync(accountId, minBatchIndex, ct: ct);
         return Results.Json(new
         {
             balanceCents = projection.BalanceCents,
@@ -272,7 +271,7 @@ static Guid RequestEventId(HttpContext context)
 async Task InitDatabase(IServiceProvider services)
 {
     var db = services.GetRequiredService<NpgsqlDataSource>();
-    await using var cmd = db.CreateCommand(@"
+    await using (var cmd = db.CreateCommand(@"
         CREATE TABLE IF NOT EXISTS account_balances (
             account_id                UUID PRIMARY KEY,
             account_name              TEXT NOT NULL,
@@ -280,8 +279,32 @@ async Task InitDatabase(IServiceProvider services)
             last_batch_index          BIGINT NOT NULL DEFAULT 0,
             last_client_event_index   BIGINT NOT NULL DEFAULT 0,
             updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
-        )");
-    await cmd.ExecuteNonQueryAsync();
+        )"))
+    {
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    // The response cache for retried requests. It lives next to the projection
+    // cursor because the cursor lives here; cursor and cache move together,
+    // atomically, in one statement. See AccountService.
+    await using (var cmd = db.CreateCommand(@"
+        CREATE TABLE IF NOT EXISTS request_responses (
+            event_id      UUID NOT NULL,
+            aggregate_id  UUID NOT NULL,
+            balance_cents BIGINT NOT NULL,
+            batch_index   BIGINT NOT NULL,
+            expires_at    TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (event_id, aggregate_id)
+        )"))
+    {
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    await using (var cmd = db.CreateCommand(
+        "CREATE INDEX IF NOT EXISTS request_responses_expires_at ON request_responses (expires_at)"))
+    {
+        await cmd.ExecuteNonQueryAsync();
+    }
 }
 
 // ─────────────────── Seed ───────────────────
@@ -316,12 +339,22 @@ async Task SeedAccounts(ICeleriantPool pool, NpgsqlDataSource db)
             // Doesn't exist yet — seed it
         }
 
+        // Guarded on version 0: every replica runs this at boot, and two booting
+        // replicas can both see "not seeded" above. The loser's OCC rejection is
+        // the dedup.
         var evt = AggregateEventExtensions.Create(1L, new Deposited(seedCents), serializer);
-        await pool.WriteAsync(key, [evt],
-            clientId: Constants.ServiceClientId,
-            allowCreate: true);
-
-        Console.WriteLine($"Seeded {name} with ${seedCents / 100m:F2}");
+        try
+        {
+            await pool.WriteAsync(key, [evt],
+                clientId: Constants.ServiceClientId,
+                allowCreate: true,
+                expectedVersion: 0);
+            Console.WriteLine($"Seeded {name} with ${seedCents / 100m:F2}");
+        }
+        catch (WriteOccException)
+        {
+            // another replica seeded it first
+        }
     }
 }
 

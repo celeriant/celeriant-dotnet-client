@@ -4,6 +4,7 @@ using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 using Celeriant.Client.Serialization;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Celeriant.Reference;
 
@@ -19,11 +20,29 @@ public sealed record AccountProjection(
 
 public sealed record WriteResult(long BalanceCents, long BatchIndex);
 
+/// <summary>Catch-up output: fresh projection state, plus the original response if the request already landed.</summary>
+public sealed record CatchUpResult(AccountProjection Projection, WriteResult? Hit);
+
+/// <summary>
+/// Account service with a Postgres-backed projection, safe to run as many
+/// replicas (e.g. k8s HPA) sharing one ServiceClientId.
+///
+/// The projection cursor lives in Postgres, so the request-response cache must
+/// live there too: once any replica bumps the shared last_batch_index, no other
+/// replica's catch-up will ever replay those events, and an in-memory cache
+/// could never be warmed. Cursor and cache move together, atomically, in the
+/// same statement. The happy path stays at one Postgres round trip (projection
+/// row + response row in one query) plus the Celeriant catch-up read and the
+/// write itself.
+///
+/// Default READ COMMITTED is enough. Celeriant's expectedVersion guard is the
+/// serialization point; Postgres holds no invariant that spans statements.
+/// That stays true only while each persist remains a single statement.
+/// </summary>
 public sealed class AccountService(
     ICeleriantPool pool,
     NpgsqlDataSource db,
-    ILogger<AccountService> logger,
-    IdempotencyCache idempotency)
+    ILogger<AccountService> logger)
 {
     private const int MaxRetries = 3;
     private static readonly IEventSerializer Serializer = JsonEventSerializer.Default;
@@ -31,30 +50,38 @@ public sealed class AccountService(
     // ───────────────────────── Catch-Up ─────────────────────────
 
     /// <summary>
-    /// Lazy catch-up: read projection from Postgres, read new events from Celeriant,
-    /// replay, upsert. Returns fresh projection state.
-    ///
-    /// last_client_event_index is persisted in Postgres alongside the balance, so when
-    /// the projection is already current we avoid an extra Celeriant read. During replay
-    /// of new batches we scan for our ClientId and update the running max.
+    /// Lazy catch-up: read the projection and response rows from Postgres in one
+    /// query, read new events from Celeriant, fold, persist. Returns fresh
+    /// projection state, plus the original response if <paramref name="eventId"/>
+    /// already landed.
     /// </summary>
-    public async Task<AccountProjection> CatchUpAsync(
+    public async Task<CatchUpResult> CatchUpAsync(
         Guid accountId,
         long? minBatchIndex = null,
+        Guid? eventId = null,
         CancellationToken ct = default)
     {
         var key = Constants.AccountKey(accountId);
 
-        // Step 1: Read current projection from Postgres (includes last_client_event_index)
+        // Step 1: projection row and response row, one round trip. The response
+        // row answers "did this request already land?" for retries arriving on
+        // a different replica than the one that served the original.
         long balanceCents = 0;
         long lastBatchIndex = 0;
         long maxClientSeq = 0;
-        string accountName = "";
+        var accountName = "";
+        WriteResult? hit = null;
 
-        await using (var cmd = db.CreateCommand(
-            "SELECT account_name, balance_cents, last_batch_index, last_client_event_index FROM account_balances WHERE account_id = @id"))
+        await using (var cmd = db.CreateCommand(@"
+            SELECT b.account_name, b.balance_cents, b.last_batch_index, b.last_client_event_index,
+                   r.balance_cents, r.batch_index
+            FROM account_balances b
+            LEFT JOIN request_responses r
+              ON r.event_id = @eid AND r.aggregate_id = b.account_id AND r.expires_at > now()
+            WHERE b.account_id = @id"))
         {
             cmd.Parameters.AddWithValue("id", accountId);
+            cmd.Parameters.Add(new NpgsqlParameter("eid", NpgsqlDbType.Uuid) { Value = (object?)eventId ?? DBNull.Value });
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
             {
@@ -62,48 +89,61 @@ public sealed class AccountService(
                 balanceCents = reader.GetInt64(1);
                 lastBatchIndex = reader.GetInt64(2);
                 maxClientSeq = reader.GetInt64(3);
+                if (!reader.IsDBNull(4) && !reader.IsDBNull(5))
+                    hit = new WriteResult(reader.GetInt64(4), reader.GetInt64(5));
             }
         }
 
-        // Step 2: Read new events from Celeriant (from lastBatchIndex + 1)
-        var fromIndex = lastBatchIndex + 1;
+        if (hit is not null)
+            return new CatchUpResult(
+                new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq), hit);
 
         // If caller needs a minimum freshness and projection is already fresh enough, return early
         if (minBatchIndex.HasValue && lastBatchIndex >= minBatchIndex.Value)
-            return new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq);
+            return new CatchUpResult(
+                new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq), null);
 
-        ReadResponse response;
+        // Step 2: read new events from Celeriant, following pagination. Buffering
+        // the whole backlog is fine for the demo; a production fold over long
+        // histories would stream batches instead, or start from a snapshot.
+        var fromIndex = lastBatchIndex + 1;
+        var batches = new List<AggregateEventBatch>();
         try
         {
-            response = await pool.ReadAsync(new ReadRequest
-            {
-                AggregateKey = key,
-                Filters = ReadFilters.From(fromIndex),
-            }, ct);
+            await foreach (var batch in pool.ReadAllAsync(key, ReadFilters.From(fromIndex), ct))
+                batches.Add(batch);
         }
         catch (AggregateNotFoundException)
         {
-            return new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq);
+            return new CatchUpResult(
+                new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq), null);
         }
 
-        if (response.EventBatches.Length == 0)
-        {
-            return new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq);
-        }
+        if (batches.Count == 0)
+            return new CatchUpResult(
+                new AccountProjection(accountId, accountName, balanceCents, lastBatchIndex, maxClientSeq), null);
 
-        // Step 3: Replay new events — update balance, track maxClientSeq, warm the caches.
-        // Warm-window aging is batch-vs-tip in server time; mixing in the local clock
-        // would let skew silently disable warming.
+        // Step 3: replay new events, collecting response rows for the recent
+        // window. A replayed event gets its remaining lifetime, the window minus
+        // its server-time age (batch vs tip; the local clock would let skew
+        // misjudge it), so a row can never outlive the stated window. Keyed by
+        // event id (sorted) so a reused key cannot produce two rows for one
+        // upsert, and concurrent replicas upsert in the same order.
+        var tipTs = batches[^1].ServerTimestamp;
+
+        var warmRows = new SortedDictionary<Guid, (long Balance, long BatchIndex, long RemainingMs)>();
+        WriteResult? found = null;
+
         var newBalance = balanceCents;
-        long newBatchIndex = lastBatchIndex;
-        var tipTs = response.EventBatches[^1].ServerTimestamp;
-        var warmWindow = IdempotencyCache.WarmWindow;
+        var newBatchIndex = lastBatchIndex;
 
-        foreach (var batch in response.EventBatches)
+        foreach (var batch in batches)
         {
             newBatchIndex = batch.AggregateVersion;
             var trackClientSeq = batch.ClientId == Constants.ServiceClientId;
-            var warmCache = tipTs - batch.ServerTimestamp < warmWindow;
+            var age = tipTs - batch.ServerTimestamp;
+            if (age < TimeSpan.Zero)
+                age = TimeSpan.Zero;
 
             foreach (var evt in batch.Events)
             {
@@ -112,49 +152,90 @@ public sealed class AccountService(
 
                 newBalance = ReplayEvent(newBalance, evt);
 
-                if (warmCache && evt.EventId is { } eid)
+                if (age < Verify.DedupWindow && evt.EventId is { } eid)
                 {
-                    idempotency.Set(eid, accountId, new IdempotencyEntry(newBalance, batch.AggregateVersion));
-                    // Record the seq's owner so an IdempotencyViolation can be verified.
-                    if (trackClientSeq)
-                        idempotency.SetSeqOwner(accountId, evt.ClientSeq, eid);
+                    var remainingMs = (long)(Verify.DedupWindow - age).TotalMilliseconds;
+                    warmRows[eid] = (newBalance, batch.AggregateVersion, remainingMs);
+                    if (eventId == eid)
+                        found = new WriteResult(newBalance, batch.AggregateVersion);
                 }
             }
         }
 
-        // Step 4: UPSERT into Postgres (conditional — won't go backwards)
+        // Step 4: persist the cursor and the response rows in one atomic
+        // statement. The bump kills the replay path for every replica, so the
+        // rows must be visible no later than the bump; atomicity guarantees it.
+        // The upsert refreshes any existing row rather than skipping it, so a
+        // re-warmed event id never loses its entry.
         if (newBatchIndex > lastBatchIndex)
         {
-            await using var cmd = db.CreateCommand(@"
-                INSERT INTO account_balances (account_id, account_name, balance_cents, last_batch_index, last_client_event_index, updated_at)
-                VALUES (@id, @name, @balance, @batchIndex, @clientSeq, now())
-                ON CONFLICT (account_id) DO UPDATE
-                SET balance_cents = @balance,
-                    account_name = COALESCE(NULLIF(@name, ''), account_balances.account_name),
-                    last_batch_index = @batchIndex, last_client_event_index = @clientSeq, updated_at = now()
-                WHERE account_balances.last_batch_index < @batchIndex");
-            cmd.Parameters.AddWithValue("id", accountId);
-            cmd.Parameters.AddWithValue("name", accountName);
-            cmd.Parameters.AddWithValue("balance", newBalance);
-            cmd.Parameters.AddWithValue("batchIndex", newBatchIndex);
-            cmd.Parameters.AddWithValue("clientSeq", maxClientSeq);
-            await cmd.ExecuteNonQueryAsync(ct);
+            var eids = new Guid[warmRows.Count];
+            var bals = new long[warmRows.Count];
+            var vers = new long[warmRows.Count];
+            var rems = new long[warmRows.Count];
+            var i = 0;
+            foreach (var (eid, row) in warmRows)
+            {
+                eids[i] = eid;
+                bals[i] = row.Balance;
+                vers[i] = row.BatchIndex;
+                rems[i] = row.RemainingMs;
+                i++;
+            }
+
+            await using (var cmd = db.CreateCommand(@"
+                WITH proj AS (
+                    INSERT INTO account_balances (account_id, account_name, balance_cents, last_batch_index, last_client_event_index, updated_at)
+                    VALUES (@id, @name, @balance, @batchIndex, @clientSeq, now())
+                    ON CONFLICT (account_id) DO UPDATE
+                    SET balance_cents = @balance,
+                        account_name = COALESCE(NULLIF(@name, ''), account_balances.account_name),
+                        last_batch_index = @batchIndex, last_client_event_index = @clientSeq, updated_at = now()
+                    WHERE account_balances.last_batch_index < @batchIndex
+                )
+                INSERT INTO request_responses (event_id, aggregate_id, balance_cents, batch_index, expires_at)
+                SELECT t.eid, @id, t.bal, t.ver, now() + t.rem_ms * interval '1 millisecond'
+                FROM unnest(@eids, @bals, @vers, @rems) AS t(eid, bal, ver, rem_ms)
+                ON CONFLICT (event_id, aggregate_id) DO UPDATE
+                SET balance_cents = EXCLUDED.balance_cents,
+                    batch_index = EXCLUDED.batch_index,
+                    expires_at = GREATEST(request_responses.expires_at, EXCLUDED.expires_at)"))
+            {
+                cmd.Parameters.AddWithValue("id", accountId);
+                cmd.Parameters.AddWithValue("name", accountName);
+                cmd.Parameters.AddWithValue("balance", newBalance);
+                cmd.Parameters.AddWithValue("batchIndex", newBatchIndex);
+                cmd.Parameters.AddWithValue("clientSeq", maxClientSeq);
+                cmd.Parameters.AddWithValue("eids", eids);
+                cmd.Parameters.AddWithValue("bals", bals);
+                cmd.Parameters.AddWithValue("vers", vers);
+                cmd.Parameters.AddWithValue("rems", rems);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            // Housekeeping, deliberately outside the atomic statement: a delete
+            // and an upsert touching the same row in one statement is undefined
+            // in Postgres. This path only runs when the cursor was behind;
+            // production would run it on a timer instead.
+            await using (var cleanup = db.CreateCommand(
+                "DELETE FROM request_responses WHERE expires_at < now()"))
+            {
+                await cleanup.ExecuteNonQueryAsync(ct);
+            }
         }
 
-        return new AccountProjection(accountId, accountName, newBalance, newBatchIndex, maxClientSeq);
+        return new CatchUpResult(
+            new AccountProjection(accountId, accountName, newBalance, newBatchIndex, maxClientSeq), found);
     }
 
     // ───────────────────────── Write: Deposit ─────────────────────────
 
     public async Task<WriteResult> DepositAsync(
-        Guid accountId, int amountCents, Guid? eventId = null, CancellationToken ct = default)
+        Guid accountId, int amountCents, Guid eventId, CancellationToken ct = default)
     {
-        var projection = await CatchUpAsync(accountId, ct: ct);
-
-        // event_id is supplied via the HTTP Idempotency-Key. If a prior attempt already landed
-        // (and catch-up warmed the cache), return its outcome without writing again.
-        if (eventId is { } eid && idempotency.TryGet(eid, accountId, out var hit))
-            return new WriteResult(hit.BalanceCents, hit.AggregateVersion);
+        var (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+        if (hit is not null)
+            return hit;
 
         var clientSeq = projection.MaxClientSeq + 1;
         var reDeriveCei = false;
@@ -164,9 +245,9 @@ public sealed class AccountService(
             if (attempt > 1)
             {
                 await Backoff(attempt, ct);
-                projection = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } reid && idempotency.TryGet(reid, accountId, out var rehit))
-                    return new WriteResult(rehit.BalanceCents, rehit.AggregateVersion);
+                (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+                if (hit is not null)
+                    return hit;
                 if (reDeriveCei)
                 {
                     clientSeq = projection.MaxClientSeq + 1;
@@ -194,81 +275,63 @@ public sealed class AccountService(
                     ct: ct);
 
                 var newBatchIndex = projection.LastBatchIndex + 1;
-                // Caches before the projection bump: the bump kills the replay path
-                // for same-key siblings, so the cache must already answer by then.
-                if (eventId is { } seid)
-                {
-                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
-                    idempotency.SetSeqOwner(accountId, clientSeq, seid);
-                }
-
-                await UpdateProjectionOptimistically(accountId, projection.AccountName,
-                    newBalance, newBatchIndex, projection.LastBatchIndex, clientSeq, ct);
-
+                await RecordWriteAsync(accountId, eventId, newBalance, newBatchIndex,
+                    projection.LastBatchIndex, clientSeq, ct);
                 return new WriteResult(newBalance, newBatchIndex);
             }
-            catch (WriteOccException) when (attempt < MaxRetries)
+            catch (WriteOccException)
             {
                 logger.LogDebug("OCC conflict on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException) when (attempt < MaxRetries)
+            catch (CeleriantTimeoutException)
             {
-                // Timeout is ambiguous — our write may have landed.
-                // Hold clientSeq constant so IdempotencyViolation catches the landed write.
+                // Timeout is ambiguous; hold clientSeq constant so an
+                // IdempotencyViolation catches the landed write.
                 logger.LogWarning("Timeout on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
             }
-            catch (InflightDuplicateWriteException) when (attempt < MaxRetries)
+            catch (InflightDuplicateWriteException)
             {
-                // Prior attempt fsynced but not yet durable; treating it as success would be a
-                // false ack if it later rolls back. Hold clientSeq and retry.
+                // Prior attempt accepted but not yet confirmed durable; treating it
+                // as success would be a false ack if it later rolls back.
                 logger.LogDebug("Inflight duplicate on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
             }
             catch (IdempotencyViolationException)
             {
-                // Someone landed this clientSeq: our timed-out prior attempt, or a sibling
-                // request that derived the same number. Verify before claiming success;
-                // a false "done" silently drops the deposit.
-                var p = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } veid)
+                // Someone landed this clientSeq: our timed-out prior attempt, or a
+                // sibling request that derived the same number. The stream knows which.
+                switch (await Verify.WhoOwnsSeqAsync(pool, accountId, clientSeq, eventId, ct))
                 {
-                    if (idempotency.TryGet(veid, accountId, out var vhit))
-                        return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
-
-                    var owner = idempotency.SeqOwner(accountId, clientSeq);
-                    if (owner == veid)
+                    case SeqOwnership.Ours:
                     {
-                        logger.LogInformation("Idempotency hit on deposit for {AccountId} — prior attempt landed", accountId);
-                        return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                        logger.LogInformation("Idempotency hit on deposit for {AccountId}: prior attempt landed", accountId);
+                        var (p, h) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+                        return h ?? new WriteResult(p.BalanceCents, p.LastBatchIndex);
                     }
-                    if (owner is not null)
-                    {
-                        // A sibling took the seq; our event never landed.
-                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling — re-deriving", clientSeq, accountId);
+                    case SeqOwnership.Sibling:
+                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling; re-deriving", clientSeq, accountId);
                         reDeriveCei = true;
                         continue;
-                    }
+                    default:
+                        throw new OccExhaustedException("Deposit state unverifiable after idempotency violation; retry the request.");
                 }
-                // Unknown ownership: refuse to guess.
-                throw new OccExhaustedException("Deposit state unverifiable after idempotency violation — retry the request.");
             }
         }
 
-        throw new OccExhaustedException("Deposit failed after retries — account was modified concurrently.");
+        throw new OccExhaustedException("Deposit did not complete after retries: concurrent updates or timeouts. Retry the request.");
     }
 
     // ───────────────────────── Write: Withdraw ─────────────────────────
 
     public async Task<WriteResult> WithdrawAsync(
-        Guid accountId, int amountCents, Guid? eventId = null, CancellationToken ct = default)
+        Guid accountId, int amountCents, Guid eventId, CancellationToken ct = default)
     {
-        var projection = await CatchUpAsync(accountId, ct: ct);
-
-        if (eventId is { } eid && idempotency.TryGet(eid, accountId, out var hit))
-            return new WriteResult(hit.BalanceCents, hit.AggregateVersion);
+        var (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+        if (hit is not null)
+            return hit;
 
         var clientSeq = projection.MaxClientSeq + 1;
         var reDeriveCei = false;
@@ -278,9 +341,9 @@ public sealed class AccountService(
             if (attempt > 1)
             {
                 await Backoff(attempt, ct);
-                projection = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } reid && idempotency.TryGet(reid, accountId, out var rehit))
-                    return new WriteResult(rehit.BalanceCents, rehit.AggregateVersion);
+                (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+                if (hit is not null)
+                    return hit;
                 if (reDeriveCei)
                 {
                     clientSeq = projection.MaxClientSeq + 1;
@@ -311,30 +374,22 @@ public sealed class AccountService(
                     ct: ct);
 
                 var newBatchIndex = projection.LastBatchIndex + 1;
-                // Caches before the projection bump, as in deposit.
-                if (eventId is { } seid)
-                {
-                    idempotency.Set(seid, accountId, new IdempotencyEntry(newBalance, newBatchIndex));
-                    idempotency.SetSeqOwner(accountId, clientSeq, seid);
-                }
-
-                await UpdateProjectionOptimistically(accountId, projection.AccountName,
-                    newBalance, newBatchIndex, projection.LastBatchIndex, clientSeq, ct);
-
+                await RecordWriteAsync(accountId, eventId, newBalance, newBatchIndex,
+                    projection.LastBatchIndex, clientSeq, ct);
                 return new WriteResult(newBalance, newBatchIndex);
             }
-            catch (WriteOccException) when (attempt < MaxRetries)
+            catch (WriteOccException)
             {
                 logger.LogDebug("OCC conflict on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException) when (attempt < MaxRetries)
+            catch (CeleriantTimeoutException)
             {
                 logger.LogWarning("Timeout on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
             }
-            catch (InflightDuplicateWriteException) when (attempt < MaxRetries)
+            catch (InflightDuplicateWriteException)
             {
                 logger.LogDebug("Inflight duplicate on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
@@ -342,30 +397,25 @@ public sealed class AccountService(
             catch (IdempotencyViolationException)
             {
                 // Same verification as deposit.
-                var p = await CatchUpAsync(accountId, ct: ct);
-                if (eventId is { } veid)
+                switch (await Verify.WhoOwnsSeqAsync(pool, accountId, clientSeq, eventId, ct))
                 {
-                    if (idempotency.TryGet(veid, accountId, out var vhit))
-                        return new WriteResult(vhit.BalanceCents, vhit.AggregateVersion);
-
-                    var owner = idempotency.SeqOwner(accountId, clientSeq);
-                    if (owner == veid)
+                    case SeqOwnership.Ours:
                     {
-                        logger.LogInformation("Idempotency hit on withdraw for {AccountId} — prior attempt landed", accountId);
-                        return new WriteResult(p.BalanceCents, p.LastBatchIndex);
+                        logger.LogInformation("Idempotency hit on withdraw for {AccountId}: prior attempt landed", accountId);
+                        var (p, h) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
+                        return h ?? new WriteResult(p.BalanceCents, p.LastBatchIndex);
                     }
-                    if (owner is not null)
-                    {
-                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling — re-deriving", clientSeq, accountId);
+                    case SeqOwnership.Sibling:
+                        logger.LogInformation("ClientSeq {ClientSeq} on {AccountId} taken by a sibling; re-deriving", clientSeq, accountId);
                         reDeriveCei = true;
                         continue;
-                    }
+                    default:
+                        throw new OccExhaustedException("Withdrawal state unverifiable after idempotency violation; retry the request.");
                 }
-                throw new OccExhaustedException("Withdrawal state unverifiable after idempotency violation — retry the request.");
             }
         }
 
-        throw new OccExhaustedException("Withdrawal failed after retries — account was modified concurrently.");
+        throw new OccExhaustedException("Withdrawal did not complete after retries: concurrent updates or timeouts. Retry the request.");
     }
 
     // ───────────────────────── Write: Transfer ─────────────────────────
@@ -373,20 +423,17 @@ public sealed class AccountService(
     public sealed record TransferResult(WriteResult From, WriteResult To);
 
     public async Task<TransferResult> TransferAsync(
-        Guid fromAccountId, Guid toAccountId, int amountCents, Guid? eventId = null, CancellationToken ct = default)
+        Guid fromAccountId, Guid toAccountId, int amountCents, Guid eventId, CancellationToken ct = default)
     {
         if (fromAccountId == toAccountId)
             throw new ValidationException("Cannot transfer to the same account.");
 
-        var fromProjection = await CatchUpAsync(fromAccountId, ct: ct);
-        var toProjection = await CatchUpAsync(toAccountId, ct: ct);
+        var (fromProjection, fromHit) = await CatchUpAsync(fromAccountId, eventId: eventId, ct: ct);
+        var (toProjection, toHit) = await CatchUpAsync(toAccountId, eventId: eventId, ct: ct);
+        if (await ResolveTransferHitsAsync(eventId, fromAccountId, toAccountId, fromHit, toHit, ct) is { } done)
+            return done;
 
-        // After catching up both aggregates, a prior landed attempt warms both cache entries.
-        // Reconstruct the result only when both sides hit.
-        if (CachedTransfer(eventId, fromAccountId, toAccountId) is { } cached)
-            return cached;
-
-        // Derive ClientSeq for each aggregate independently — per (AggregateKey, ClientId)
+        // Derive ClientSeq for each aggregate independently; it is per (AggregateKey, ClientId)
         var fromClientSeq = fromProjection.MaxClientSeq + 1;
         var toClientSeq = toProjection.MaxClientSeq + 1;
         var reDeriveCei = false;
@@ -396,10 +443,10 @@ public sealed class AccountService(
             if (attempt > 1)
             {
                 await Backoff(attempt, ct);
-                fromProjection = await CatchUpAsync(fromAccountId, ct: ct);
-                toProjection = await CatchUpAsync(toAccountId, ct: ct);
-                if (CachedTransfer(eventId, fromAccountId, toAccountId) is { } rehit)
-                    return rehit;
+                (fromProjection, fromHit) = await CatchUpAsync(fromAccountId, eventId: eventId, ct: ct);
+                (toProjection, toHit) = await CatchUpAsync(toAccountId, eventId: eventId, ct: ct);
+                if (await ResolveTransferHitsAsync(eventId, fromAccountId, toAccountId, fromHit, toHit, ct) is { } redone)
+                    return redone;
                 if (reDeriveCei)
                 {
                     fromClientSeq = fromProjection.MaxClientSeq + 1;
@@ -456,38 +503,29 @@ public sealed class AccountService(
                 var newFromBatch = fromProjection.LastBatchIndex + 1;
                 var newToBatch = toProjection.LastBatchIndex + 1;
 
-                // Caches before the projection bumps, as in deposit.
-                if (eventId is { } seid)
-                {
-                    idempotency.Set(seid, fromAccountId, new IdempotencyEntry(newFromBalance, newFromBatch));
-                    idempotency.Set(seid, toAccountId, new IdempotencyEntry(newToBalance, newToBatch));
-                    idempotency.SetSeqOwner(fromAccountId, fromClientSeq, seid);
-                    idempotency.SetSeqOwner(toAccountId, toClientSeq, seid);
-                }
-
-                await UpdateProjectionOptimistically(fromAccountId, fromProjection.AccountName,
-                    newFromBalance, newFromBatch, fromProjection.LastBatchIndex, fromClientSeq, ct);
-                await UpdateProjectionOptimistically(toAccountId, toProjection.AccountName,
-                    newToBalance, newToBatch, toProjection.LastBatchIndex, toClientSeq, ct);
+                await RecordWriteAsync(fromAccountId, eventId, newFromBalance, newFromBatch,
+                    fromProjection.LastBatchIndex, fromClientSeq, ct);
+                await RecordWriteAsync(toAccountId, eventId, newToBalance, newToBatch,
+                    toProjection.LastBatchIndex, toClientSeq, ct);
 
                 return new TransferResult(
                     new WriteResult(newFromBalance, newFromBatch),
                     new WriteResult(newToBalance, newToBatch));
             }
-            catch (WriteOccException) when (attempt < MaxRetries)
+            catch (WriteOccException)
             {
                 logger.LogDebug("OCC conflict on transfer {From}->{To}, attempt {Attempt}",
                     fromAccountId, toAccountId, attempt);
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException) when (attempt < MaxRetries)
+            catch (CeleriantTimeoutException)
             {
                 logger.LogWarning("Timeout on transfer {From}->{To}, attempt {Attempt}",
                     fromAccountId, toAccountId, attempt);
                 continue;
             }
-            catch (InflightDuplicateWriteException) when (attempt < MaxRetries)
+            catch (InflightDuplicateWriteException)
             {
                 logger.LogDebug("Inflight duplicate on transfer {From}->{To}, attempt {Attempt}",
                     fromAccountId, toAccountId, attempt);
@@ -495,57 +533,66 @@ public sealed class AccountService(
             }
             catch (IdempotencyViolationException)
             {
-                // At least one leg's clientSeq was consumed: our prior transfer, or a
-                // sibling's write on either account. Verify.
-                fromProjection = await CatchUpAsync(fromAccountId, ct: ct);
-                toProjection = await CatchUpAsync(toAccountId, ct: ct);
-                if (CachedTransfer(eventId, fromAccountId, toAccountId) is { } vhit)
-                    return vhit;
+                // At least one leg's clientSeq was consumed; the error does not say
+                // which. The write is all-or-nothing, so owning either leg proves the
+                // whole transfer landed; a sibling owning a leg proves it did not.
+                var fromOwner = await Verify.WhoOwnsSeqAsync(pool, fromAccountId, fromClientSeq, eventId, ct);
+                var verdict = fromOwner == SeqOwnership.Unwritten
+                    ? await Verify.WhoOwnsSeqAsync(pool, toAccountId, toClientSeq, eventId, ct)
+                    : fromOwner;
 
-                if (eventId is { } veid)
+                switch (verdict)
                 {
-                    var fromOwner = idempotency.SeqOwner(fromAccountId, fromClientSeq);
-                    var toOwner = idempotency.SeqOwner(toAccountId, toClientSeq);
-
-                    if ((fromOwner is not null && fromOwner != veid) || (toOwner is not null && toOwner != veid))
+                    case SeqOwnership.Ours:
                     {
-                        logger.LogInformation("Transfer clientSeq taken by a sibling — re-deriving");
+                        logger.LogInformation("Idempotency hit on transfer: prior attempt landed");
+                        var (fp, fh) = await CatchUpAsync(fromAccountId, eventId: eventId, ct: ct);
+                        var (tp, th) = await CatchUpAsync(toAccountId, eventId: eventId, ct: ct);
+                        if (await ResolveTransferHitsAsync(eventId, fromAccountId, toAccountId, fh, th, ct) is { } vdone)
+                            return vdone;
+                        return new TransferResult(
+                            new WriteResult(fp.BalanceCents, fp.LastBatchIndex),
+                            new WriteResult(tp.BalanceCents, tp.LastBatchIndex));
+                    }
+                    case SeqOwnership.Sibling:
+                        logger.LogInformation("Transfer clientSeq taken by a sibling; re-deriving");
                         reDeriveCei = true;
                         continue;
-                    }
-                    // The write is all-or-nothing: owning either leg proves the whole
-                    // transfer landed.
-                    if (fromOwner == veid || toOwner == veid)
-                    {
-                        logger.LogInformation("Idempotency hit on transfer — prior attempt landed");
-                        return new TransferResult(
-                            new WriteResult(fromProjection.BalanceCents, fromProjection.LastBatchIndex),
-                            new WriteResult(toProjection.BalanceCents, toProjection.LastBatchIndex));
-                    }
+                    default:
+                        throw new OccExhaustedException("Transfer state unverifiable after idempotency violation; retry the request.");
                 }
-                throw new OccExhaustedException("Transfer state unverifiable after idempotency violation — retry the request.");
             }
         }
 
-        throw new OccExhaustedException("Transfer failed after retries — accounts were modified concurrently.");
+        throw new OccExhaustedException("Transfer did not complete after retries: concurrent updates or timeouts. Retry the request.");
     }
 
     /// <summary>
-    /// Reconstruct a transfer result from the idempotency cache. Returns null unless
-    /// <b>both</b> aggregates have a cache entry for <paramref name="eventId"/>.
+    /// The transfer write is all-or-nothing, so a response-cache hit on EITHER
+    /// leg proves the whole transfer landed. Reconstruct a missing leg (row
+    /// expired) from current state.
     /// </summary>
-    private TransferResult? CachedTransfer(Guid? eventId, Guid fromAccountId, Guid toAccountId)
+    private async Task<TransferResult?> ResolveTransferHitsAsync(
+        Guid eventId, Guid fromAccountId, Guid toAccountId,
+        WriteResult? fromHit, WriteResult? toHit, CancellationToken ct)
     {
-        if (eventId is not { } eid)
-            return null;
-        if (!idempotency.TryGet(eid, fromAccountId, out var from))
-            return null;
-        if (!idempotency.TryGet(eid, toAccountId, out var to))
-            return null;
-
-        return new TransferResult(
-            new WriteResult(from.BalanceCents, from.AggregateVersion),
-            new WriteResult(to.BalanceCents, to.AggregateVersion));
+        switch (fromHit, toHit)
+        {
+            case ({ } f, { } t):
+                return new TransferResult(f, t);
+            case ({ } f, null):
+            {
+                var (tp, th) = await CatchUpAsync(toAccountId, eventId: eventId, ct: ct);
+                return new TransferResult(f, th ?? new WriteResult(tp.BalanceCents, tp.LastBatchIndex));
+            }
+            case (null, { } t):
+            {
+                var (fp, fh) = await CatchUpAsync(fromAccountId, eventId: eventId, ct: ct);
+                return new TransferResult(fh ?? new WriteResult(fp.BalanceCents, fp.LastBatchIndex), t);
+            }
+            default:
+                return null;
+        }
     }
 
     // ───────────────────────── Event History ─────────────────────────
@@ -554,21 +601,19 @@ public sealed class AccountService(
         Guid accountId, long? fromBatchIndex = null, CancellationToken ct = default)
     {
         // Catch up first so projection is current
-        var projection = await CatchUpAsync(accountId, ct: ct);
+        var (projection, _) = await CatchUpAsync(accountId, ct: ct);
 
         var key = Constants.AccountKey(accountId);
         try
         {
-            var response = await pool.ReadAsync(new ReadRequest
+            var events = new List<object>();
+            await foreach (var batch in pool.ReadAllAsync(key, ReadFilters.From(fromBatchIndex ?? 1), ct))
             {
-                AggregateKey = key,
-                Filters = ReadFilters.From(fromBatchIndex ?? 1),
-            }, ct);
+                foreach (var evt in batch.Events)
+                    events.Add(FormatEvent(batch, evt));
+            }
 
-            var events = response.EventBatches.SelectMany(b =>
-                b.Events.Select(e => FormatEvent(b, e))).ToArray();
-
-            return (events, projection.LastBatchIndex, projection.BalanceCents);
+            return (events.ToArray(), projection.LastBatchIndex, projection.BalanceCents);
         }
         catch (AggregateNotFoundException)
         {
@@ -610,31 +655,46 @@ public sealed class AccountService(
         };
     }
 
-    private async Task UpdateProjectionOptimistically(
-        Guid accountId, string accountName, long newBalance, long newBatchIndex,
+    /// <summary>
+    /// Persist a successful write: response row and projection bump in one
+    /// atomic statement, so no replica can ever observe the bump without the
+    /// row. A Postgres failure here is logged and swallowed: the Celeriant
+    /// write succeeded (Celeriant is the source of truth), and with neither
+    /// the row nor the bump applied, the next catch-up replays the event and
+    /// self-heals.
+    /// </summary>
+    private async Task RecordWriteAsync(
+        Guid accountId, Guid eventId, long newBalance, long newBatchIndex,
         long expectedBatchIndex, long clientSeq, CancellationToken ct)
     {
         try
         {
             await using var cmd = db.CreateCommand(@"
-                UPDATE account_balances
-                SET balance_cents = @balance, last_batch_index = @batchIndex,
-                    last_client_event_index = @clientSeq, updated_at = now()
-                WHERE account_id = @id AND last_batch_index = @expectedBatchIndex");
+                WITH proj AS (
+                    UPDATE account_balances
+                    SET balance_cents = @balance, last_batch_index = @batchIndex,
+                        last_client_event_index = @clientSeq, updated_at = now()
+                    WHERE account_id = @id AND last_batch_index = @expectedBatchIndex
+                )
+                INSERT INTO request_responses (event_id, aggregate_id, balance_cents, batch_index, expires_at)
+                VALUES (@eid, @id, @balance, @batchIndex, now() + @windowMs * interval '1 millisecond')
+                ON CONFLICT (event_id, aggregate_id) DO UPDATE
+                SET balance_cents = EXCLUDED.balance_cents,
+                    batch_index = EXCLUDED.batch_index,
+                    expires_at = GREATEST(request_responses.expires_at, EXCLUDED.expires_at)");
             cmd.Parameters.AddWithValue("id", accountId);
+            cmd.Parameters.AddWithValue("eid", eventId);
             cmd.Parameters.AddWithValue("balance", newBalance);
             cmd.Parameters.AddWithValue("batchIndex", newBatchIndex);
             cmd.Parameters.AddWithValue("expectedBatchIndex", expectedBatchIndex);
             cmd.Parameters.AddWithValue("clientSeq", clientSeq);
+            cmd.Parameters.AddWithValue("windowMs", (long)Verify.DedupWindow.TotalMilliseconds);
             await cmd.ExecuteNonQueryAsync(ct);
-            // 0 rows affected is fine — next read will catch up (M-PASS 0 rows)
+            // 0 projection rows affected is fine; the next read will catch up.
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Postgres failure after successful Celeriant write — log and continue.
-            // The write DID succeed (Celeriant is source of truth). Projection self-heals on next catch-up.
-            // See FAILURE-ANALYSIS.md M-FAIL.
-            logger.LogWarning(ex, "Failed to update projection for {AccountId} — will self-heal on next catch-up", accountId);
+            logger.LogWarning(ex, "Failed to persist write for {AccountId}, will self-heal on next catch-up", accountId);
         }
     }
 
@@ -650,7 +710,7 @@ public sealed class AccountService(
 public sealed class ValidationException(string message) : Exception(message);
 
 public sealed class InsufficientFundsException(long balanceCents, int requestedCents)
-    : Exception($"Cannot process ${requestedCents / 100m:F2} — balance is ${balanceCents / 100m:F2}")
+    : Exception($"Cannot process ${requestedCents / 100m:F2}, balance is ${balanceCents / 100m:F2}")
 {
     public long BalanceCents => balanceCents;
 }

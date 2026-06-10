@@ -300,9 +300,9 @@ Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. C
 
 The retry behaviour depends on why the write failed:
 
-- **OCC failure**: re-derive `ClientSeq` from fresh state (the aggregate moved, your index assumption was wrong)
-- **Timeout**: hold `ClientSeq` constant (the write may have already landed, changing the index would bypass the dedup check)
-- **Idempotency violation**: the prior attempt already landed. Treat as success.
+- **OCC failure**: re-derive `ClientSeq` from fresh state (the aggregate moved, your seq assumption was wrong)
+- **Timeout**: hold `ClientSeq` constant (the write may have already landed; changing the seq would bypass the dedup check)
+- **Idempotency violation**: the seq landed, durably. With concurrent requests sharing one `ClientId`, it may have been a sibling's write, so verify before claiming success: point-read the contested seq (`ReadFilters` with `MinClientSeq`/`MaxClientSeq` plus `IncludeClientId`) and compare the `EventId`. Yours means the prior attempt landed. A sibling's means your event never landed; re-derive and retry. `Celeriant.Reference` implements the full loop.
 
 ### Dynamic consistency boundaries
 

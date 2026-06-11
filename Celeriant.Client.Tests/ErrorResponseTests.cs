@@ -47,6 +47,32 @@ public class ErrorResponseTests
     }
 
     // -----------------------------------------------------------------------
+    // IsServerBusy
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(ErrorResponse.ServerBusy)]
+    [InlineData(ErrorResponse.WriteReplicationBackpressure)]
+    [InlineData(ErrorResponse.TrimReplicationBackpressure)]
+    [InlineData(ErrorResponse.DeleteReplicationBackpressure)]
+    public void IsServerBusy_BusyErrorCodes_ReturnsTrue(uint errorCode)
+    {
+        var error = new ErrorResponse { ErrorCode = errorCode };
+        Assert.True(error.IsServerBusy);
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(ErrorResponse.WriteReplicationError)]
+    [InlineData(ErrorResponse.TrimReplicationError)]
+    [InlineData(ErrorResponse.DeleteReplicationError)]
+    public void IsServerBusy_OtherErrorCodes_ReturnsFalse(uint errorCode)
+    {
+        var error = new ErrorResponse { ErrorCode = errorCode };
+        Assert.False(error.IsServerBusy);
+    }
+
+    // -----------------------------------------------------------------------
     // ParseLeaderAddress
     // -----------------------------------------------------------------------
 
@@ -103,7 +129,9 @@ public class ErrorResponseTests
     {
         Assert.Equal(2011u, ErrorResponse.WriteNotLeader);
         Assert.Equal(3005u, ErrorResponse.TrimNotLeader);
+        Assert.Equal(3006u, ErrorResponse.TrimReplicationBackpressure);
         Assert.Equal(4006u, ErrorResponse.DeleteNotLeader);
+        Assert.Equal(4007u, ErrorResponse.DeleteReplicationBackpressure);
         Assert.Equal(10004u, ErrorResponse.IdentifyRequired);
         Assert.Equal(10005u, ErrorResponse.AuthRequired);
         Assert.Equal(10006u, ErrorResponse.AuthInvalidKey);

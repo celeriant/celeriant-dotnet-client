@@ -53,6 +53,8 @@ public sealed class ErrorResponse
     public const uint TrimFsyncError = 3003;
     public const uint TrimIndexOutOfRange = 3004;
     public const uint TrimNotLeader = 3005;
+    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    public const uint TrimReplicationBackpressure = 3006;
 
     // --- Delete errors: 4xxx ---
     public const uint DeleteAggregateNotExists = 4000;
@@ -62,6 +64,8 @@ public sealed class ErrorResponse
     public const uint DeleteReplicationError = 4004;
     public const uint DeleteFsyncError = 4005;
     public const uint DeleteNotLeader = 4006;
+    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    public const uint DeleteReplicationBackpressure = 4007;
 
     // --- Listing errors: 5xxx ---
     public const uint ListOrgsDiskRead = 5000;
@@ -124,7 +128,10 @@ public sealed class ErrorResponse
     public bool IsIdentityRequired => ErrorCode == IdentifyRequired;
 
     [IgnoreMember]
-    public bool IsServerBusy => ErrorCode is ServerBusy or WriteReplicationBackpressure;
+    public bool IsServerBusy => ErrorCode is ServerBusy
+        or WriteReplicationBackpressure
+        or TrimReplicationBackpressure
+        or DeleteReplicationBackpressure;
 
     /// <summary>
     /// The error message parsed as a flat JSON object. Each key maps to its raw

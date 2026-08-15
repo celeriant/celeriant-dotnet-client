@@ -1,9 +1,11 @@
-using Celeriant.Client.Protocol;
+using Celeriant.Transport;
 
-namespace Celeriant.Client.Tests;
+namespace Celeriant.Transport.Tests;
 
 public class WireHeaderTests
 {
+    private const uint V3 = WireHeader.ProtocolVersionV3;
+
     private static WireHeader RoundTrip(WireHeader header)
     {
         Span<byte> buf = stackalloc byte[WireHeader.Size];
@@ -33,7 +35,7 @@ public class WireHeaderTests
     [Fact]
     public void RoundTrip_ForRequest_NoneCompression()
     {
-        var header = WireHeader.ForRequest(messageType: 7, length: 256);
+        var header = WireHeader.ForRequest(V3, messageType: 7, length: 256);
         var read = RoundTrip(header);
 
         Assert.Equal(WireHeader.ProtocolVersionV3, read.Version);
@@ -55,6 +57,7 @@ public class WireHeaderTests
         foreach (var ct in compressionTypes)
         {
             var header = WireHeader.ForCompressedRequest(
+                V3,
                 messageType: 3,
                 compressedLength: 100,
                 uncompressedLength: 400,
@@ -71,9 +74,18 @@ public class WireHeaderTests
     }
 
     [Fact]
+    public void RoundTrip_V2_BincodeVersionPreserved()
+    {
+        var header = WireHeader.ForRequest(WireHeader.ProtocolVersionV2, messageType: 3, length: 64);
+        var read = RoundTrip(header);
+        Assert.Equal(2u, read.Version);
+        Assert.Equal(3u, read.MessageType);
+    }
+
+    [Fact]
     public void RoundTrip_MaxMessageType_Preserved()
     {
-        var header = WireHeader.ForRequest(messageType: uint.MaxValue, length: 0);
+        var header = WireHeader.ForRequest(V3, messageType: uint.MaxValue, length: 0);
         var read = RoundTrip(header);
         Assert.Equal(uint.MaxValue, read.MessageType);
     }
@@ -83,7 +95,7 @@ public class WireHeaderTests
     {
         Assert.Equal(3u, WireHeader.ProtocolVersionV3);
 
-        var header = WireHeader.ForRequest(messageType: 5, length: 42);
+        var header = WireHeader.ForRequest(V3, messageType: 5, length: 42);
         var read = RoundTrip(header);
         Assert.Equal(3u, read.Version);
     }
@@ -97,18 +109,17 @@ public class WireHeaderTests
     [Fact]
     public void WriteTo_ProducesExactly17Bytes()
     {
-        var header = WireHeader.ForRequest(messageType: 1, length: 100);
+        var header = WireHeader.ForRequest(V3, messageType: 1, length: 100);
         var buf = new byte[WireHeader.Size];
         header.WriteTo(buf);
 
-        // Verify the buffer was fully written by checking the version field
         Assert.Equal(3u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0)));
     }
 
     [Fact]
     public void ForRequest_SetsCompressedAndUncompressedEqual()
     {
-        var header = WireHeader.ForRequest(messageType: 2, length: 999);
+        var header = WireHeader.ForRequest(V3, messageType: 2, length: 999);
         Assert.Equal(header.CompressedLength, header.UncompressedLength);
         Assert.Equal(999u, header.CompressedLength);
         Assert.Equal(0, header.CompressionType);
@@ -118,6 +129,7 @@ public class WireHeaderTests
     public void ForCompressedRequest_SetsDistinctLengths()
     {
         var header = WireHeader.ForCompressedRequest(
+            V3,
             messageType: 3,
             compressedLength: 100,
             uncompressedLength: 400,

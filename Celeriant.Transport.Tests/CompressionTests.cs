@@ -1,6 +1,6 @@
-using Celeriant.Client.Protocol;
+using Celeriant.Transport;
 
-namespace Celeriant.Client.Tests;
+namespace Celeriant.Transport.Tests;
 
 /// <summary>
 /// Round-trip tests for dictionary-based zstd wire compression (the only algorithm the
@@ -44,15 +44,15 @@ public class CompressionTests
     public void Compressed_SmallerThanOriginal_ForLargeRepetitivePayload()
     {
         var payload = MakeLargePayload();
-        var compressed = WireCodec.CompressWithDict(payload, Dict);
+        var compressed = DictCompression.CompressWithDict(payload, Dict);
         Assert.True(compressed.Length < payload.Length,
             $"Expected compressed size ({compressed.Length}) < original ({payload.Length})");
     }
 
     private static void VerifyRoundTrip(byte[] original)
     {
-        var compressed = WireCodec.CompressWithDict(original, Dict);
-        var decompressed = WireCodec.DecompressWithDict(compressed, (uint)original.Length, Dict);
+        var compressed = DictCompression.CompressWithDict(original, Dict);
+        var decompressed = DictCompression.DecompressWithDict(compressed, (uint)original.Length, Dict);
 
         Assert.Equal(original.Length, decompressed.Length);
         Assert.Equal(original, decompressed);

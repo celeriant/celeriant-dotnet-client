@@ -1,22 +1,25 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
-namespace Celeriant.Client.Protocol;
+namespace Celeriant.Transport;
 
 /// <summary>
-/// 17-byte little-endian wire header for the Celeriant V3 (MessagePack) protocol.
+/// 17-byte little-endian wire header shared by every Celeriant product (storage engine and
+/// queue both reuse celeriant_wire's framing). Only the protocol version (which selects the
+/// body codec) and the message-type id namespace differ per product.
 ///
 /// Layout:
-///   offset 0  : uint32  version
+///   offset 0  : uint32  version              (V2 = bincode, V3 = MessagePack)
 ///   offset 4  : uint32  message_type
 ///   offset 8  : uint32  compressed_length
 ///   offset 12 : uint32  uncompressed_length
 ///   offset 16 : uint8   compression_type
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal readonly struct WireHeader
+public readonly struct WireHeader
 {
     public const int Size = 17;
+    public const uint ProtocolVersionV2 = 2;
     public const uint ProtocolVersionV3 = 3;
 
     public readonly uint Version;             // offset 0
@@ -39,26 +42,20 @@ internal readonly struct WireHeader
         CompressionType = compressionType;
     }
 
-    /// <summary>
-    /// Construct a V3 header with no compression.
-    /// compressed_length and uncompressed_length are both set to <paramref name="length"/>.
-    /// </summary>
-    public static WireHeader ForRequest(uint messageType, uint length) =>
-        new(ProtocolVersionV3, messageType, length, length, 0);
+    /// <summary>Construct a header with no compression for the given protocol version.</summary>
+    public static WireHeader ForRequest(uint version, uint messageType, uint length) =>
+        new(version, messageType, length, length, 0);
 
-    /// <summary>
-    /// Construct a V3 header with compression.
-    /// </summary>
+    /// <summary>Construct a compressed header for the given protocol version.</summary>
     public static WireHeader ForCompressedRequest(
+        uint version,
         uint messageType,
         uint compressedLength,
         uint uncompressedLength,
-        Protocol.CompressionType compression) =>
-        new(ProtocolVersionV3, messageType, compressedLength, uncompressedLength, (byte)compression);
+        CompressionType compression) =>
+        new(version, messageType, compressedLength, uncompressedLength, (byte)compression);
 
-    /// <summary>
-    /// Parse a 17-byte header from a buffer.
-    /// </summary>
+    /// <summary>Parse a 17-byte header from a buffer.</summary>
     public static WireHeader ParseFrom(ReadOnlySpan<byte> buf)
     {
         uint version          = BinaryPrimitives.ReadUInt32LittleEndian(buf[0..]);
@@ -69,9 +66,7 @@ internal readonly struct WireHeader
         return new WireHeader(version, messageType, compressedLength, uncompressedLen, compressionType);
     }
 
-    /// <summary>
-    /// Write the 17-byte header into the given buffer starting at offset 0.
-    /// </summary>
+    /// <summary>Write the 17-byte header into the given buffer starting at offset 0.</summary>
     public void WriteTo(Span<byte> buf)
     {
         BinaryPrimitives.WriteUInt32LittleEndian(buf[0..], Version);
@@ -80,5 +75,4 @@ internal readonly struct WireHeader
         BinaryPrimitives.WriteUInt32LittleEndian(buf[12..], UncompressedLength);
         buf[16] = CompressionType;
     }
-
 }

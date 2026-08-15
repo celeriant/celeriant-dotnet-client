@@ -1,29 +1,24 @@
-namespace Celeriant.Client;
+namespace Celeriant.Transport;
 
 /// <summary>
-/// Pool-level, content-addressed compression-dictionary cache shared across all node pools.
-///
-/// <para>
-/// New connections advertise <see cref="LastSha"/> as <c>KnownDictSha256</c> during Identify so the
-/// server can skip re-sending the (~14&#160;KiB) dictionary bytes when they already match. When the
-/// server confirms a sha without resending bytes, <see cref="DictForSha"/> resolves them from here.
-/// </para>
-///
-/// <para>Thread-safe.</para>
+/// Pool-wide, content-addressed compression-dictionary cache shared across all node pools. New
+/// connections advertise <see cref="LastSha"/> as <c>known_dict_sha256</c> during Identify so the
+/// server can skip re-shipping the (~14&#160;KiB) dictionary bytes when they already match; a
+/// sha-only confirmation is resolved through <see cref="DictForSha"/>. Thread-safe.
 /// </summary>
-internal sealed class PoolDictCache
+public sealed class DictCache
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, byte[]> _cache = new();
     private string? _lastSha;
 
-    /// <summary>Most recently confirmed dictionary sha for this pool's cluster, or null.</summary>
+    /// <summary>Most recently negotiated dictionary sha for this cluster, or null.</summary>
     public string? LastSha
     {
         get { lock (_lock) return _lastSha; }
     }
 
-    /// <summary>Returns the cached dictionary bytes for <paramref name="sha"/>, or null if not cached.</summary>
+    /// <summary>Cached dictionary bytes for <paramref name="sha"/>, or null if not cached.</summary>
     public byte[]? DictForSha(string sha)
     {
         lock (_lock)

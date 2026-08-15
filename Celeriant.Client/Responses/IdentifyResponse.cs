@@ -20,7 +20,7 @@ public sealed class IdentifyResponse
 
     /// <summary>
     /// SHA-256 hex of the cluster's current compression dictionary.
-    /// Null when the cluster's compression algorithm is not <see cref="Protocol.CompressionType.ZstdDict"/>.
+    /// Null when the cluster's compression algorithm is not zstd-dictionary based.
     /// </summary>
     [Key(3)]
     public string? CompressionDictSha256 { get; init; }

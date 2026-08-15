@@ -6,6 +6,7 @@ using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
 using Celeriant.Client.Streaming;
 using Celeriant.Client.Watch;
+using Celeriant.Transport;
 
 namespace Celeriant.Client;
 
@@ -37,10 +38,10 @@ public sealed class CeleriantPool : ICeleriantPool
 {
     private readonly CeleriantPoolOptions _options;
     private readonly ConcurrentDictionary<string, INodeConnectionPool> _nodePools = new();
-    private readonly Func<string, CeleriantPoolOptions, PoolDictCache, INodeConnectionPool> _poolFactory;
+    private readonly Func<string, CeleriantPoolOptions, DictCache, INodeConnectionPool> _poolFactory;
 
     // Shared compression-dictionary cache: one negotiated dictionary serves every node pool.
-    private readonly PoolDictCache _dictCache = new();
+    private readonly DictCache _dictCache = new();
 
     // The address believed to be the current leader. Updated on failover.
     private volatile string _leaderAddress;
@@ -65,7 +66,7 @@ public sealed class CeleriantPool : ICeleriantPool
     /// </summary>
     internal CeleriantPool(
         CeleriantPoolOptions options,
-        Func<string, CeleriantPoolOptions, PoolDictCache, INodeConnectionPool> poolFactory)
+        Func<string, CeleriantPoolOptions, DictCache, INodeConnectionPool> poolFactory)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _poolFactory = poolFactory ?? throw new ArgumentNullException(nameof(poolFactory));

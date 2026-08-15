@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
-using Celeriant.Client.Crypto;
+using Celeriant.Transport;
 
-namespace Celeriant.Client.Tests;
+namespace Celeriant.Transport.Tests;
 
 /// <summary>
 /// Unit tests for CeleriantCrypto: nonce generation, RSA signing, and client identity derivation.

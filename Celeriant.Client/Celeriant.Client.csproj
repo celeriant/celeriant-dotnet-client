@@ -48,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MessagePack" Version="2.5.187" />
+    <PackageReference Include="MessagePack" Version="2.5.302" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />

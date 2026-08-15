@@ -91,8 +91,14 @@ public static class ListExtensions
                 response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
-            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            catch (CeleriantErrorException ex) when (
+                cursor is null
+                && maxShard is null
+                && ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
             {
+                // First-page probe walked past the last shard: record the ceiling and
+                // keep draining queued continuation pages. A routing error on a
+                // continuation page (or with an explicit MaxShardHint) propagates.
                 hasMoreShards = false;
                 continue;
             }
@@ -176,8 +182,14 @@ public static class ListExtensions
                 response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
-            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            catch (CeleriantErrorException ex) when (
+                cursor is null
+                && maxShard is null
+                && ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
             {
+                // First-page probe walked past the last shard: record the ceiling and
+                // keep draining queued continuation pages. A routing error on a
+                // continuation page (or with an explicit MaxShardHint) propagates.
                 hasMoreShards = false;
                 continue;
             }
@@ -228,6 +240,7 @@ public static class ListExtensions
         // Key: aggregate_id (unique per (org, type, aggregate) triple — but we also key on
         // the full triple in case the caller passes no org/type filter and IDs collide).
         var accumulated = new Dictionary<(Guid orgId, Guid typeId, Guid aggId), AggregateStats>();
+        var firstSeenOrder = new List<(Guid orgId, Guid typeId, Guid aggId)>();
         var pendingPages = new Queue<(long shardId, long? cursor)>();
 
         long nextShardToProbe = options.StartShard;
@@ -269,8 +282,14 @@ public static class ListExtensions
                 response = await client.SendRequestAsync(request, ct)
                     .ConfigureAwait(false);
             }
-            catch (CeleriantErrorException ex) when (ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
+            catch (CeleriantErrorException ex) when (
+                cursor is null
+                && maxShard is null
+                && ex.Error.ErrorCode is ShardRoutingError1 or ShardRoutingError2)
             {
+                // First-page probe walked past the last shard: record the ceiling and
+                // keep draining queued continuation pages. A routing error on a
+                // continuation page (or with an explicit MaxShardHint) propagates.
                 hasMoreShards = false;
                 continue;
             }
@@ -280,9 +299,9 @@ public static class ListExtensions
 
             foreach (AggregateListItem item in listResponse.Value.Aggregates)
             {
-                if (!options.IncludeDeleted && item.IsDeleted)
-                    continue;
-
+                // Accumulate before filtering: IsDeleted must be sticky across pages,
+                // so a deleted page seen after a live one still marks the merged
+                // record deleted. The IncludeDeleted filter is applied at yield time.
                 var key = (item.OrgId, item.AggregateTypeId, item.AggregateId);
                 if (accumulated.TryGetValue(key, out AggregateStats? existing))
                 {
@@ -291,6 +310,7 @@ public static class ListExtensions
                 else
                 {
                     accumulated[key] = FromListItem(item);
+                    firstSeenOrder.Add(key);
                 }
             }
 
@@ -298,9 +318,14 @@ public static class ListExtensions
                 pendingPages.Enqueue((shardId, listResponse.Value.NextCursor.Value));
         }
 
-        // Yield all accumulated stats after full traversal.
-        foreach (AggregateStats stats in accumulated.Values)
+        // Yield in first-seen order after full traversal.
+        foreach (var key in firstSeenOrder)
+        {
+            AggregateStats stats = accumulated[key];
+            if (!options.IncludeDeleted && stats.IsDeleted)
+                continue;
             yield return stats;
+        }
     }
 
     // -------------------------------------------------------------------------

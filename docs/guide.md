@@ -35,7 +35,7 @@ There's no cardinality limit. Millions of aggregates, billions of events. Celeri
 Celeriant connections are plain TCP sockets. Not like PostgreSQL where each connection spawns a server process. There's no session state, no connection overhead worth worrying about. Connect, send requests, dispose.
 
 ```csharp
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
 ```
 
 A single connection is fine for simple use cases, scripts, or admin tools. The client reuses the TCP connection across multiple requests.
@@ -92,13 +92,14 @@ This registers `ICeleriantPool` as a singleton. Inject the interface into your s
 public class OrderService(ICeleriantPool pool)
 {
     private static readonly JsonEventSerializer Serializer = JsonEventSerializer.Default;
+    private static readonly Guid ClientId = Guid.Parse("...");  // stable per service, see Client ID below
 
     public async Task PlaceOrder(Guid orderId, decimal total, string customer)
     {
         var key = new AggregateKey(orgId, orderTypeId, orderId);
         await pool.WriteAsync(key, [
             AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, total, customer), Serializer)
-        ]);
+        ], ClientId);
     }
 }
 ```
@@ -162,7 +163,7 @@ When the connection identifies, the client library generates a nonce (current ep
 
 ```csharp
 // Direct connection
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
 await client.IdentifyAsync(identity);
 
 // Or via pool (identifies automatically on each new connection)
@@ -264,17 +265,17 @@ var serializer = JsonEventSerializer.Default;
 
 await client.WriteAsync(key, [
     AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, 99.95m, "Alice"), serializer)
-]);
+], myClientId);
 ```
 
 `EventTypeMajor` and `EventTypeMinor` identify the event's schema version. Use major for breaking changes, minor for backwards-compatible additions. These tie into the schema registry (more on that below).
 
 ### Optimistic concurrency control
 
-Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteErrorException`. This is how you enforce business invariants at write time: no distributed locks needed.
+Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteOccException`. This is how you enforce business invariants at write time: no distributed locks needed.
 
 ```csharp
-await client.WriteAsync(key, events,
+await client.WriteAsync(key, events, myClientId,
     expectedVersion: currentBatchIndex);
 ```
 
@@ -283,7 +284,7 @@ When a concurrency conflict happens, the exception tells you exactly what went w
 ```csharp
 try
 {
-    await pool.WriteAsync(key, events, expectedVersion: staleIndex);
+    await pool.WriteAsync(key, events, myClientId, expectedVersion: staleIndex);
 }
 catch (WriteOccException ex)
 {
@@ -297,7 +298,7 @@ There is no automatic retry on OCC failures. That's by design: only your domain 
 
 ### Exactly-once writes
 
-Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. Celeriant tracks the highest `ClientSeq` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with a `ClientIdempotencyViolation` instead of writing it twice.
+Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. Celeriant tracks the highest `ClientSeq` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with an `IdempotencyViolationException` instead of writing it twice.
 
 The retry behaviour depends on why the write failed:
 
@@ -537,7 +538,7 @@ await foreach (var agg in pool.ListAggregatesAsync(orgId: tenantId, aggregateTyp
 }
 ```
 
-`ListOptions` lets you include deleted aggregates and control compression:
+`ListOptions` lets you include deleted aggregates:
 
 ```csharp
 var options = new ListOptions { IncludeDeleted = true };

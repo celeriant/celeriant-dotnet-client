@@ -35,14 +35,14 @@ docker run -d --name celeriant \
 ### 2. Connect and write an event
 
 ```csharp
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
 
 var serializer = JsonEventSerializer.Default;
 var key = new AggregateKey(orgId: myOrg, aggregateTypeId: myType, aggregateId: orderId);
 
 await client.WriteAsync(key, [
     AggregateEventExtensions.Create(eventTypeMajor: 1, new OrderPlaced(orderId, 99.95m), serializer)
-]);
+], clientId: myClientId);
 ```
 
 ### 3. Read it back
@@ -68,7 +68,7 @@ await using var pool = new CeleriantPool(new CeleriantPoolOptions
     MaxConnections = 20,
 });
 
-await pool.WriteAsync(key, events);
+await pool.WriteAsync(key, events, myClientId);
 var read = await pool.ReadAsync(readRequest);
 ```
 

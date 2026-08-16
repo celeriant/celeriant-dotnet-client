@@ -3,7 +3,7 @@ namespace Celeriant.Transport;
 /// <summary>
 /// A connection borrowed from a <see cref="ConnectionPool{TConn}"/>. Disposing it returns the
 /// connection to the pool when healthy, or discards it when marked broken (a transport/timeout error
-/// left the stream framing indeterminate). Not thread-safe — one lease per logical unit of work.
+/// left the stream framing indeterminate). Not thread-safe: one lease per logical unit of work.
 /// </summary>
 public sealed class PooledLease<TConn> : IAsyncDisposable where TConn : IAsyncDisposable
 {

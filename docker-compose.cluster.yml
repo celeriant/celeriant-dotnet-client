@@ -28,7 +28,7 @@ services:
       mc anonymous set public local/celeriant-cluster;
       "
 
-  # Node 1 — exposed on host port 10000
+  # Node 1: exposed on host port 10000
   celeriant-node-1:
     image: ghcr.io/celeriant/celeriant:latest
     depends_on:
@@ -75,7 +75,7 @@ services:
     volumes:
       - node1-data:/var/lib/celeriant
 
-  # Node 2 — exposed on host port 10002 (container still listens on 10000)
+  # Node 2: exposed on host port 10002 (container still listens on 10000)
   celeriant-node-2:
     image: ghcr.io/celeriant/celeriant:latest
     depends_on:

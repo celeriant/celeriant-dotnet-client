@@ -14,15 +14,15 @@ namespace Celeriant.Client.IntegrationTests;
 ///
 /// <para>
 /// Environment variables:
-///   RPI_ADDRESS_1   — primary node (default: 10.0.0.50:10000)
-///   RPI_ADDRESS_2   — seed node (default: 10.0.0.51:10000)
-///   RPI_CA_CERT     — CA cert for server verification (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client-ca.crt)
-///   RPI_CLIENT_CERT — client cert for mTLS (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client.crt)
-///   RPI_CLIENT_KEY  — client key for mTLS (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client.key)
-///   RPI_SERVER_NAME — TLS SNI server name (default: 10.0.0.50)
-///   RPI_CONNECTIONS — pool max connections (default: 200)
-///   RPI_TASKS       — concurrent writer tasks (default: 2000)
-///   RPI_DURATION    — test duration in seconds (default: 15)
+///   RPI_ADDRESS_1  : primary node (default: 10.0.0.50:10000)
+///   RPI_ADDRESS_2  : seed node (default: 10.0.0.51:10000)
+///   RPI_CA_CERT    : CA cert for server verification (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client-ca.crt)
+///   RPI_CLIENT_CERT: client cert for mTLS (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client.crt)
+///   RPI_CLIENT_KEY : client key for mTLS (default: ../../../../../../../celeriant-db/deploy/rpi-cluster/certs/client.key)
+///   RPI_SERVER_NAME: TLS SNI server name (default: 10.0.0.50)
+///   RPI_CONNECTIONS: pool max connections (default: 200)
+///   RPI_TASKS      : concurrent writer tasks (default: 2000)
+///   RPI_DURATION   : test duration in seconds (default: 15)
 /// </para>
 ///
 /// <para>Run with: dotnet test --filter RpiClusterPoolBench</para>
@@ -133,7 +133,7 @@ public sealed class RpiClusterPoolBench
         Console.WriteLine(
             $"  Tasks: {r.NumTasks} | Requests: {r.TotalRequests} | Errors: {r.Errors} | Throughput: {r.ThroughputPerSec:F0} req/s");
         Console.WriteLine(
-            $"  Latency — Avg: {r.AvgMs:F1}ms | P50: {r.P50Ms}ms | P95: {r.P95Ms}ms | P99: {r.P99Ms}ms | Min: {r.MinMs}ms | Max: {r.MaxMs}ms");
+            $"  Latency: Avg: {r.AvgMs:F1}ms | P50: {r.P50Ms}ms | P95: {r.P95Ms}ms | P99: {r.P99Ms}ms | Min: {r.MinMs}ms | Max: {r.MaxMs}ms");
     }
 
     private static async Task<BenchmarkResult> RunBenchmarkAsync(

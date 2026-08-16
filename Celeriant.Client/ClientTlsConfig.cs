@@ -10,12 +10,12 @@ namespace Celeriant.Client;
 /// <para>
 /// Use one of the static factory methods for common scenarios:
 /// <list type="bullet">
-///   <item><see cref="Create"/> — server-only TLS with standard certificate validation.</item>
-///   <item><see cref="WithClientCertificate(string, X509Certificate2)"/> — mTLS using a client certificate with an embedded private key.</item>
-///   <item><see cref="WithClientCertificate(string, X509Certificate2, AsymmetricAlgorithm)"/> — mTLS with a
+///   <item><see cref="Create"/>: server-only TLS with standard certificate validation.</item>
+///   <item><see cref="WithClientCertificate(string, X509Certificate2)"/>: mTLS using a client certificate with an embedded private key.</item>
+///   <item><see cref="WithClientCertificate(string, X509Certificate2, AsymmetricAlgorithm)"/>: mTLS with a
 ///   separate signing key (e.g. backed by AWS KMS, Azure Key Vault, or an HSM).</item>
-///   <item><see cref="WithClientCertificateFromPem"/> — mTLS loading certificate and key from PEM files.</item>
-///   <item><see cref="FromSslOptions"/> — full control via <see cref="SslClientAuthenticationOptions"/>.</item>
+///   <item><see cref="WithClientCertificateFromPem"/>: mTLS loading certificate and key from PEM files.</item>
+///   <item><see cref="FromSslOptions"/>: full control via <see cref="SslClientAuthenticationOptions"/>.</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -69,14 +69,14 @@ public sealed class ClientTlsConfig
 
     /// <summary>
     /// Create a mutual TLS (mTLS) configuration with a separate signing key.
-    /// Use this when the private key is not embedded in the certificate — for example,
+    /// Use this when the private key is not embedded in the certificate: for example,
     /// when signing is performed remotely by AWS KMS, Azure Key Vault, Google Cloud KMS,
     /// or a hardware security module (HSM).
     ///
     /// <para>
     /// Pass the public certificate (without a private key) and an <see cref="AsymmetricAlgorithm"/>
     /// implementation that delegates signing to the remote key store. The .NET runtime calls
-    /// <see cref="RSA.SignHash(byte[], HashAlgorithmName, RSASignaturePadding)"/> or <see cref="ECDsa.SignHash(byte[])"/> during the TLS handshake —
+    /// <see cref="RSA.SignHash(byte[], HashAlgorithmName, RSASignaturePadding)"/> or <see cref="ECDsa.SignHash(byte[])"/> during the TLS handshake:
     /// your implementation performs that operation via the KMS/HSM API.
     /// </para>
     ///
@@ -95,7 +95,7 @@ public sealed class ClientTlsConfig
     /// </param>
     /// <param name="privateKey">
     /// An <see cref="RSA"/> or <see cref="ECDsa"/> implementation that performs signing.
-    /// This can be backed by a remote key store (KMS/HSM) — the private key material
+    /// This can be backed by a remote key store (KMS/HSM): the private key material
     /// never needs to be present locally.
     /// </param>
     public static ClientTlsConfig WithClientCertificate(

@@ -10,7 +10,8 @@ namespace Celeriant.Client;
 /// </summary>
 public interface ICeleriantPool : IAsyncDisposable
 {
-    /// <summary>Send a read request. Distributed across all known nodes via round-robin.</summary>
+    /// <summary>Send a read request. Routed to the leader by default (read-your-writes);
+    /// to followers when <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.</summary>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist.</exception>
     /// <exception cref="Errors.BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="Errors.BatchIndexUnavailableException.MinimumAvailableVersion"/>.</exception>
     /// <exception cref="Errors.ConnectionFailedException">All known nodes are unreachable.</exception>
@@ -18,7 +19,8 @@ public interface ICeleriantPool : IAsyncDisposable
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
     Task<ReadResponse> ReadAsync(ReadRequest request, CancellationToken ct = default);
 
-    /// <summary>Send an aggregate details request. Distributed across all known nodes via round-robin.</summary>
+    /// <summary>Send an aggregate details request. Routed to the leader by default (read-your-writes);
+    /// to followers when <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.</summary>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist.</exception>
     /// <exception cref="Errors.ConnectionFailedException">All known nodes are unreachable.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>
@@ -33,8 +35,8 @@ public interface ICeleriantPool : IAsyncDisposable
     Task<SuccessResponse> RegisterSchemaAsync(RegisterSchemaRequest request, CancellationToken ct = default);
 
     /// <summary>Send a write request. Routed to the leader with automatic failover.</summary>
-    /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
-    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write — the event was already accepted. No action needed.</exception>
+    /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation: the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write: the event was already accepted. No action needed.</exception>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist and <c>AllowCreate</c> is false.</exception>
     /// <exception cref="Errors.AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
     /// <exception cref="Errors.SchemaValidationException">An event payload does not conform to the registered schema.</exception>
@@ -45,8 +47,8 @@ public interface ICeleriantPool : IAsyncDisposable
     Task<WriteResponse> WriteAsync(WriteRequest request, CancellationToken ct = default);
 
     /// <summary>Write events to a single aggregate. Routed to the leader with automatic failover.</summary>
-    /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
-    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write — the event was already accepted. No action needed.</exception>
+    /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation: the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write: the event was already accepted. No action needed.</exception>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist and <paramref name="allowCreate"/> is false.</exception>
     /// <exception cref="Errors.AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
     /// <exception cref="Errors.SchemaValidationException">An event payload does not conform to the registered schema.</exception>
@@ -63,7 +65,7 @@ public interface ICeleriantPool : IAsyncDisposable
         CancellationToken ct = default);
 
     /// <summary>Send a delete request. Routed to the leader with automatic failover.</summary>
-    /// <exception cref="Errors.DeleteOccException">Optimistic concurrency violation — the aggregate has been modified. Re-read and retry.</exception>
+    /// <exception cref="Errors.DeleteOccException">Optimistic concurrency violation: the aggregate has been modified. Re-read and retry.</exception>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist.</exception>
     /// <exception cref="Errors.ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="Errors.CeleriantTimeoutException">The request timed out.</exception>

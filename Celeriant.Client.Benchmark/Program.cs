@@ -130,7 +130,7 @@ try
     bool hasFailures = thruFailures.Count > 0 || latFailures.Count > 0;
     if (hasFailures)
     {
-        Console.Error.WriteLine("Performance regression detected — thresholds breached");
+        Console.Error.WriteLine("Performance regression detected: thresholds breached");
         Environment.ExitCode = 1;
     }
 }

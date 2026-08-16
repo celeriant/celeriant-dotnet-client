@@ -232,7 +232,7 @@ public sealed class WatchConnection : IAsyncDisposable
             ex.Error.ErrorCode is ErrorResponse.ShardRoutingMultipleShards
                                or ErrorResponse.ShardRoutingIncompatibleFilters)
         {
-            // Server told us how many shards there are — fall back to multi-shard.
+            // Server told us how many shards there are: fall back to multi-shard.
             // Explicit shard_ids bypass the routing-rule check, so this recovers both
             // multi-shard scopes (9001) and rule-mismatched filters (9002).
             await client.DisposeAsync().ConfigureAwait(false);
@@ -240,7 +240,7 @@ public sealed class WatchConnection : IAsyncDisposable
             long numShards = ParseNumShards(ex.Error.ErrorMessage);
             if (numShards == 0)
             {
-                // Cannot determine shard count — rethrow as server error.
+                // Cannot determine shard count: rethrow as server error.
                 throw;
             }
 
@@ -277,7 +277,7 @@ public sealed class WatchConnection : IAsyncDisposable
                 if (watchResponse.Value.Events.Length > 0)
                     return watchResponse.Value;
 
-                // Heartbeat — keep reading.
+                // Heartbeat: keep reading.
                 continue;
             }
 
@@ -372,7 +372,7 @@ public sealed class WatchConnection : IAsyncDisposable
             {
                 if (response is ClientResponse.Watch watchResponse)
                 {
-                    // Skip heartbeats (empty events) — they are internal keep-alive signals.
+                    // Skip heartbeats (empty events): they are internal keep-alive signals.
                     if (watchResponse.Value.Events.Length > 0)
                         await writer.WriteAsync(watchResponse.Value, ct).ConfigureAwait(false);
                 }
@@ -418,7 +418,7 @@ public sealed class WatchConnection : IAsyncDisposable
     {
         var client = await CeleriantClient.ConnectAsync(
             address,
-            connectionTimeout: null,
+            _options.ConnectionTimeout,
             _options.TlsConfig,
             ct).ConfigureAwait(false);
 

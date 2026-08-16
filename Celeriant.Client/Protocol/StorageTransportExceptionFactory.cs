@@ -17,6 +17,9 @@ internal sealed class StorageTransportExceptionFactory : ITransportExceptionFact
     public Exception Timeout(string message)
         => new CeleriantTimeoutException(message);
 
+    public Exception ConnectTimeout(string message)
+        => new ConnectionTimeoutException(message);
+
     public Exception ConnectionFailed(string message, Exception? inner = null)
         => inner is null ? new ConnectionFailedException(message) : new ConnectionFailedException(message, inner);
 

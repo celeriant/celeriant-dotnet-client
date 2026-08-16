@@ -78,7 +78,7 @@ public sealed class CeleriantPoolOptionsBuilder
     /// <summary>Idle connection timeout. Must be shorter than the server's slow_client_timeout. Default: 25 seconds.</summary>
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromSeconds(25);
 
-    /// <summary>When true, route reads only to followers. Default: false.</summary>
+    /// <summary>When true, route reads to followers (leader as last resort). Default: false.</summary>
     public bool RouteReadsToFollowers { get; set; }
 
     /// <summary>Build the immutable <see cref="CeleriantPoolOptions"/>.</summary>

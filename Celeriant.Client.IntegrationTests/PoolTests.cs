@@ -95,7 +95,7 @@ public sealed class PoolTests
         }
         catch (Errors.CeleriantErrorException)
         {
-            // Server error is acceptable — aggregate was deleted
+            // Server error is acceptable: aggregate was deleted
         }
     }
 

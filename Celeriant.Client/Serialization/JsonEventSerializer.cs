@@ -4,7 +4,7 @@ namespace Celeriant.Client.Serialization;
 
 /// <summary>
 /// JSON event serializer using <see cref="System.Text.Json"/>.
-/// Zero additional dependencies — uses the BCL serializer.
+/// Zero additional dependencies: uses the BCL serializer.
 /// </summary>
 public sealed class JsonEventSerializer : IEventSerializer
 {

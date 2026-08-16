@@ -6,10 +6,10 @@ namespace Celeriant.Client;
 /// <para>
 /// Use one of the static factory methods to create an instance:
 /// <list type="bullet">
-///   <item><see cref="FromApiKey"/> — authenticate with a base64-encoded API key.</item>
-///   <item><see cref="FromClientId"/> — authenticate with a <see cref="Guid"/> client ID (u128).
+///   <item><see cref="FromApiKey"/>: authenticate with a base64-encoded API key.</item>
+///   <item><see cref="FromClientId"/>: authenticate with a <see cref="Guid"/> client ID (u128).
 ///   Easy to store alongside offsets in PostgreSQL as a UUID column.</item>
-///   <item><see cref="FromRsaKeyPair"/> — authenticate with an RSA key pair for nonce signing.</item>
+///   <item><see cref="FromRsaKeyPair"/>: authenticate with an RSA key pair for nonce signing.</item>
 /// </list>
 /// </para>
 /// </summary>

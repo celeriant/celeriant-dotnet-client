@@ -26,4 +26,9 @@ public sealed class WatchOptions
     /// <summary>Optional identity configuration. When set, each watch connection performs
     /// the Identify handshake before sending the watch request.</summary>
     public ClientIdentityConfig? IdentityConfig { get; init; }
+
+    /// <summary>Dial timeout for establishing the watch connection. Null means no timeout:
+    /// a black-holed node then stalls for the OS TCP timeout. <see cref="CeleriantPool"/>
+    /// fills this from its own connection timeout when unset.</summary>
+    public TimeSpan? ConnectionTimeout { get; init; }
 }

@@ -224,7 +224,7 @@ public sealed class ClusterTests
     }
 
     // -------------------------------------------------------------------------
-    // Direct follower writes — NotLeaderException
+    // Direct follower writes: NotLeaderException
     // -------------------------------------------------------------------------
 
     [SkippableFact]

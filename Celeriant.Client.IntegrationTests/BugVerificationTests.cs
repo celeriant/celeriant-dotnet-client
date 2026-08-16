@@ -121,7 +121,7 @@ public sealed class BugVerificationTests
 
             // Send one request to verify the connection works
             var key = TestHelpers.NewKey();
-            // Non-existent aggregate throws — that's fine
+            // Non-existent aggregate throws: that's fine
             try
             {
                 var resp = await client.SendRequestAsync(

@@ -50,7 +50,7 @@ public sealed class CompressionIntegrationTests
     public async Task LargePayload_Write_ReadBack_Preserved()
     {
         var key = TestHelpers.NewKey();
-        // 10KB payload — large enough to exercise the compression threshold when a dict is present.
+        // 10KB payload: large enough to exercise the compression threshold when a dict is present.
         var payload = new byte[10_000];
         new Random(42).NextBytes(payload);
 

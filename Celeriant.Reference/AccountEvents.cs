@@ -4,7 +4,7 @@ using Celeriant.Client.Requests;
 
 namespace Celeriant.Reference;
 
-// Event types — same domain as the simple demo
+// Event types: same domain as the simple demo
 public sealed record Deposited(int AmountCents);
 public sealed record Withdrawn(int AmountCents);
 public sealed record TransferredOut(int AmountCents, Guid ToAccountId);
@@ -19,7 +19,7 @@ public static class Constants
 
     /// <summary>
     /// Single service-owned ClientId. All API instances share this identity.
-    /// ClientSeq is per (AggregateKey, ClientId) — OCC serialises concurrent writes.
+    /// ClientSeq is per (AggregateKey, ClientId): OCC serialises concurrent writes.
     /// </summary>
     public static readonly Guid ServiceClientId = DeterministicGuid("ReferenceApiService");
 

@@ -140,8 +140,8 @@ public sealed class CeleriantClient : ICeleriantClient
     }
 
     /// <summary>Send a write request and return the typed response.</summary>
-    /// <exception cref="WriteOccException">Optimistic concurrency violation — re-read and retry.</exception>
-    /// <exception cref="IdempotencyViolationException">Duplicate write — already accepted. No action needed.</exception>
+    /// <exception cref="WriteOccException">Optimistic concurrency violation: re-read and retry.</exception>
+    /// <exception cref="IdempotencyViolationException">Duplicate write: already accepted. No action needed.</exception>
     /// <exception cref="AggregateNotFoundException">The aggregate does not exist and <c>AllowCreate</c> is false.</exception>
     /// <exception cref="AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
     /// <exception cref="SchemaValidationException">An event payload does not conform to the registered schema.</exception>
@@ -161,7 +161,7 @@ public sealed class CeleriantClient : ICeleriantClient
     /// <param name="key">The aggregate to write to.</param>
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID scoping client-seq idempotency. Use a stable ID per
-    /// logical writer — never a fresh random value per call, or idempotency silently stops working.</param>
+    /// logical writer: never a fresh random value per call, or idempotency silently stops working.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
     /// <param name="expectedVersion">If set, the server rejects the write unless the aggregate's
     /// current max event batch index matches this value (optimistic concurrency control).</param>
@@ -192,7 +192,7 @@ public sealed class CeleriantClient : ICeleriantClient
         }, ct);
 
     /// <summary>Send a delete request and return the typed response.</summary>
-    /// <exception cref="DeleteOccException">Optimistic concurrency violation — re-read and retry.</exception>
+    /// <exception cref="DeleteOccException">Optimistic concurrency violation: re-read and retry.</exception>
     /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
     /// <exception cref="NotLeaderException">The target node is not the leader (use the pool for automatic failover).</exception>
     public async Task<SuccessResponse> DeleteAsync(DeleteRequest request, CancellationToken ct = default)
@@ -310,7 +310,7 @@ public sealed class CeleriantClient : ICeleriantClient
         };
 
     /// <summary>
-    /// Logical payload size used for the compression threshold decision — the event values for a
+    /// Logical payload size used for the compression threshold decision: the event values for a
     /// write, or the schema text for a schema registration.
     /// </summary>
     private static long PayloadBytes(ClientRequest request) => request switch

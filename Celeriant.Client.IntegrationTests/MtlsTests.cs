@@ -53,7 +53,7 @@ public sealed class MtlsTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 1: trusted client cert — full round-trip
+    // Test 1: trusted client cert: full round-trip
     // -------------------------------------------------------------------------
 
     [SkippableFact]
@@ -80,7 +80,7 @@ public sealed class MtlsTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 2: untrusted client cert — server rejects during handshake
+    // Test 2: untrusted client cert: server rejects during handshake
     // -------------------------------------------------------------------------
 
     [SkippableFact]
@@ -101,7 +101,7 @@ public sealed class MtlsTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 3: no client cert — server requires client auth, should reject
+    // Test 3: no client cert: server requires client auth, should reject
     // -------------------------------------------------------------------------
 
     [SkippableFact]
@@ -122,7 +122,7 @@ public sealed class MtlsTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 4: plaintext to TLS server — must fail
+    // Test 4: plaintext to TLS server: must fail
     // -------------------------------------------------------------------------
 
     [SkippableFact]
@@ -201,7 +201,7 @@ public sealed class MtlsTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 7: multiple sequential operations — TLS session stays stable
+    // Test 7: multiple sequential operations: TLS session stays stable
     // -------------------------------------------------------------------------
 
     [SkippableFact]

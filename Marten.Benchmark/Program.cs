@@ -47,7 +47,7 @@ Console.WriteLine($"  Bucket size: {bucketSecs}s");
 Console.WriteLine();
 
 // ---------------------------------------------------------------------------
-// Generate event payload (JSONB-friendly — Marten serializes as JSON)
+// Generate event payload (JSONB-friendly: Marten serializes as JSON)
 // ---------------------------------------------------------------------------
 
 // Marten serializes this to JSON. The Payload field provides the bulk of the ~recordSize bytes.
@@ -63,7 +63,7 @@ using var store = DocumentStore.For(opts =>
 {
     opts.Connection(connectionString);
     opts.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
-    // Use lightweight identity map — no tracking overhead
+    // Use lightweight identity map: no tracking overhead
     opts.Events.StreamIdentity = StreamIdentity.AsGuid;
 });
 
@@ -73,7 +73,7 @@ await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
 Console.WriteLine("  Schema ready.");
 
 // ---------------------------------------------------------------------------
-// Smoke test — single event append
+// Smoke test: single event append
 // ---------------------------------------------------------------------------
 
 Console.WriteLine("  Smoke test...");
@@ -87,7 +87,7 @@ Console.WriteLine("  Smoke test...");
 Console.WriteLine();
 
 // ---------------------------------------------------------------------------
-// Benchmark — concurrent event appends with time-bucketed output
+// Benchmark: concurrent event appends with time-bucketed output
 // ---------------------------------------------------------------------------
 
 int totalBuckets = Math.Max(1, durationSecs / bucketSecs);
@@ -198,7 +198,7 @@ if (allLatencies.Count > 0)
     long min = allLatencies[0];
     long max = allLatencies[^1];
 
-    Console.WriteLine($"Latency — avg: {avg:F1}ms  P50: {p50}ms  P95: {p95}ms  P99: {p99}ms  P99.9: {p999}ms  min: {min}ms  max: {max}ms");
+    Console.WriteLine($"Latency: avg: {avg:F1}ms  P50: {p50}ms  P95: {p95}ms  P99: {p99}ms  P99.9: {p999}ms  min: {min}ms  max: {max}ms");
 }
 
 // ---------------------------------------------------------------------------

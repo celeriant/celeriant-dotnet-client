@@ -239,8 +239,9 @@ public sealed class TypedMethodTests
     [SkippableFact]
     public async Task ConnectAsync_WithTimeout_ToUnreachableHost_ThrowsTimeoutException()
     {
-        // 192.0.2.1 is TEST-NET-1 (RFC 5737) — should be unreachable and timeout
-        await Assert.ThrowsAsync<CeleriantTimeoutException>(
+        // 192.0.2.1 is TEST-NET-1 (RFC 5737): should be unreachable and timeout.
+        // Dial timeouts throw the failover-class ConnectionTimeoutException subclass.
+        await Assert.ThrowsAsync<ConnectionTimeoutException>(
             () => CeleriantClient.ConnectAsync("192.0.2.1:10000",
                 connectionTimeout: TimeSpan.FromMilliseconds(500), tlsConfig: null));
     }
@@ -249,7 +250,7 @@ public sealed class TypedMethodTests
     public async Task WithMaxRequestSize_LargePayload_Throws()
     {
         await using var client = await CeleriantClient.ConnectAsync(Address, ct: default);
-        client.WithMaxRequestSize(100); // 100 bytes — tiny
+        client.WithMaxRequestSize(100); // 100 bytes: tiny
 
         var key = TestHelpers.NewKey();
         var clientId = Guid.NewGuid();

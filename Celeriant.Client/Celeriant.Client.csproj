@@ -15,12 +15,12 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>Celeriant.Client</PackageId>
-    <Version>0.5.0</Version>
+    <Version>0.6.0</Version>
     <Authors>Celeriant</Authors>
     <Description>Official .NET client for Celeriant. An append-only event store for the write side of CQRS</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://celeriant.io</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/celeriant/celeriant-db</RepositoryUrl>
+    <RepositoryUrl>https://github.com/celeriant/celeriant-dotnet-client</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>event-sourcing;cqrs;event-store;celeriant;distributed-systems</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

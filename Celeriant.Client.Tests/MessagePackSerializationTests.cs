@@ -379,7 +379,7 @@ public class MessagePackSerializationTests
     }
 
     // -----------------------------------------------------------------------
-    // AggregateEvent — base64-encoded fields
+    // AggregateEvent: base64-encoded fields
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -433,7 +433,7 @@ public class MessagePackSerializationTests
     }
 
     // -----------------------------------------------------------------------
-    // AggregateEventBatch — base64 Guid fields (ci, ui)
+    // AggregateEventBatch: base64 Guid fields (ci, ui)
     // -----------------------------------------------------------------------
 
     [Fact]

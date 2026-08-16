@@ -36,7 +36,7 @@ internal static class ErrorExceptionFactory
                 => new AggregateNotFoundException(error),
             ErrorResponse.WriteAggregateRecreateNotAllowed
                 => new AggregateRecreateNotAllowedException(error),
-            // Prior write fsynced but not yet durable — retriable (hold client seq, retry).
+            // Prior write fsynced but not yet durable: retriable (hold client seq, retry).
             ErrorResponse.WriteInflightDuplicate
                 => new InflightDuplicateWriteException(error),
             >= ErrorResponse.WriteEmptyEventsList and <= ErrorResponse.WriteAggregateRecreateNotAllowed
@@ -46,7 +46,7 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.WriteCacheAggregateClientError
                 or ErrorResponse.WriteAggregateExistsCacheError
                 => new ServerInternalErrorException(error),
-            // Write not-leader — defensive: MapErrorResponse handles IsNotLeader before calling this factory
+            // Write not-leader: defensive: MapErrorResponse handles IsNotLeader before calling this factory
             ErrorResponse.WriteNotLeader
                 => new CeleriantErrorException(error),
 
@@ -74,7 +74,7 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.TrimReplicationError
                 or ErrorResponse.TrimFsyncError
                 => new ServerInternalErrorException(error),
-            // Trim not-leader — defensive: MapErrorResponse handles IsNotLeader before calling this factory
+            // Trim not-leader: defensive: MapErrorResponse handles IsNotLeader before calling this factory
             ErrorResponse.TrimNotLeader
                 => new CeleriantErrorException(error),
 
@@ -89,7 +89,7 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.DeleteReplicationError
                 or ErrorResponse.DeleteFsyncError
                 => new ServerInternalErrorException(error),
-            // Delete not-leader — defensive: MapErrorResponse handles IsNotLeader before calling this factory
+            // Delete not-leader: defensive: MapErrorResponse handles IsNotLeader before calling this factory
             ErrorResponse.DeleteNotLeader
                 => new CeleriantErrorException(error),
 
@@ -122,7 +122,7 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.WatchReadOther
                 => new ServerInternalErrorException(error),
 
-            // --- Shard routing errors (9xxx) — typically handled by list/watch retry logic ---
+            // --- Shard routing errors (9xxx): typically handled by list/watch retry logic ---
             ErrorResponse.ShardRoutingMultipleShards
                 => new ShardRoutingException(error),
             ErrorResponse.ShardRoutingNoKey
@@ -134,7 +134,7 @@ internal static class ErrorExceptionFactory
                 or ErrorResponse.IdentifyInvalidSignature
                 or ErrorResponse.IdentifyMismatch
                 => new AuthErrorException(error),
-            // IdentifyRequired — defensive: MapErrorResponse handles IsIdentityRequired before calling this factory
+            // IdentifyRequired: defensive: MapErrorResponse handles IsIdentityRequired before calling this factory
             ErrorResponse.IdentifyRequired
                 => new CeleriantErrorException(error),
             ErrorResponse.AuthRequired

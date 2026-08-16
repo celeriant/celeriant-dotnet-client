@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Generates test certificates for mTLS integration tests.
-# Safe to re-run — existing files are overwritten.
+# Safe to re-run: existing files are overwritten.
 #
 # Output:
-#   ca.crt / ca.key                         — trusted CA
-#   server.crt / server.key                 — server cert (SANs: localhost, 127.0.0.1)
-#   client.crt / client.key                 — client cert (signed by trusted CA)
-#   untrusted-ca.crt / untrusted-ca.key     — separate CA (for rejection tests)
-#   untrusted-client.crt / untrusted-client.key — client cert the server will reject
+#   ca.crt / ca.key                        : trusted CA
+#   server.crt / server.key                : server cert (SANs: localhost, 127.0.0.1)
+#   client.crt / client.key                : client cert (signed by trusted CA)
+#   untrusted-ca.crt / untrusted-ca.key    : separate CA (for rejection tests)
+#   untrusted-client.crt / untrusted-client.key: client cert the server will reject
 
 set -euo pipefail
 
@@ -34,7 +34,7 @@ openssl req -new -x509 \
 echo "  ca.crt / ca.key done"
 
 # ---------------------------------------------------------------------------
-# Server cert — SANs required so TLS clients validate the hostname
+# Server cert: SANs required so TLS clients validate the hostname
 # ---------------------------------------------------------------------------
 openssl ecparam -name "$CURVE" -genkey -noout -out server.key
 openssl req -new \
@@ -76,7 +76,7 @@ rm client.csr
 echo "  client.crt / client.key done"
 
 # ---------------------------------------------------------------------------
-# Untrusted CA — used to sign the rejected client cert
+# Untrusted CA: used to sign the rejected client cert
 # ---------------------------------------------------------------------------
 openssl ecparam -name "$CURVE" -genkey -noout -out untrusted-ca.key
 openssl req -new -x509 \
@@ -90,7 +90,7 @@ openssl req -new -x509 \
 echo "  untrusted-ca.crt / untrusted-ca.key done"
 
 # ---------------------------------------------------------------------------
-# Untrusted client cert — signed by untrusted CA, server must reject it
+# Untrusted client cert: signed by untrusted CA, server must reject it
 # ---------------------------------------------------------------------------
 openssl ecparam -name "$CURVE" -genkey -noout -out untrusted-client.key
 openssl req -new \

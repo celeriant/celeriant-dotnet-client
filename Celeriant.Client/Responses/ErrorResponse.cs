@@ -29,9 +29,9 @@ public sealed class ErrorResponse
     public const uint WriteCacheAggregateClientError = 2009;
     public const uint WriteAggregateExistsCacheError = 2010;
     public const uint WriteNotLeader = 2011;
-    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    /// <summary>Replication queue is saturated: request could not be accepted. Client should retry (treated as server-busy).</summary>
     public const uint WriteReplicationBackpressure = 2012;
-    /// <summary>Write is fsynced but replication is not yet confirmed — duplicate of an in-flight write. Hold the client seq and retry.</summary>
+    /// <summary>Write is fsynced but replication is not yet confirmed: duplicate of an in-flight write. Hold the client seq and retry.</summary>
     public const uint WriteInflightDuplicate = 2013;
 
     // --- Schema errors: 2020-2029 ---
@@ -53,7 +53,7 @@ public sealed class ErrorResponse
     public const uint TrimFsyncError = 3003;
     public const uint TrimIndexOutOfRange = 3004;
     public const uint TrimNotLeader = 3005;
-    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    /// <summary>Replication queue is saturated: request could not be accepted. Client should retry (treated as server-busy).</summary>
     public const uint TrimReplicationBackpressure = 3006;
 
     // --- Delete errors: 4xxx ---
@@ -64,7 +64,7 @@ public sealed class ErrorResponse
     public const uint DeleteReplicationError = 4004;
     public const uint DeleteFsyncError = 4005;
     public const uint DeleteNotLeader = 4006;
-    /// <summary>Replication queue is saturated — request could not be accepted. Client should retry (treated as server-busy).</summary>
+    /// <summary>Replication queue is saturated: request could not be accepted. Client should retry (treated as server-busy).</summary>
     public const uint DeleteReplicationBackpressure = 4007;
 
     // --- Listing errors: 5xxx ---
@@ -96,7 +96,7 @@ public sealed class ErrorResponse
     public const uint ShardRoutingIncompatibleFilters = 9002;
 
     // --- Server health errors: 11xxx ---
-    /// <summary>Shard's inter-shard channel is full — request could not be routed. Client should retry.</summary>
+    /// <summary>Shard's inter-shard channel is full: request could not be routed. Client should retry.</summary>
     public const uint ServerBusy = 11000;
 
     // --- Identity & authentication errors: 10xxx ---

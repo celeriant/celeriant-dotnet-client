@@ -99,7 +99,7 @@ public sealed class WatchTests
         // Drain the buffered first response
         await watch.NextAsync(TimeSpan.FromSeconds(6));
 
-        // Very short timeout — shorter than the heartbeat interval (~5s)
+        // Very short timeout: shorter than the heartbeat interval (~5s)
         var response = await watch.NextAsync(TimeSpan.FromMilliseconds(100));
         Assert.Null(response);
     }
@@ -285,7 +285,7 @@ public sealed class WatchTests
         }
         catch (OperationCanceledException)
         {
-            // Timeout — no matching event found.
+            // Timeout: no matching event found.
         }
 
         return null;
@@ -313,7 +313,7 @@ public sealed class WatchTests
         }
         catch (OperationCanceledException)
         {
-            // Timeout — return what we have.
+            // Timeout: return what we have.
         }
 
         return events;

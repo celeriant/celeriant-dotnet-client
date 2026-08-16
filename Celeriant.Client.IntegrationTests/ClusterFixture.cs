@@ -93,14 +93,14 @@ public sealed class ClusterFixture : IAsyncLifetime
                     TestHelpers.SingleEventWrite(key, "leader-probe"u8.ToArray())))
                 .ConfigureAwait(false);
 
-            // Write succeeded — node 1 is the leader.
+            // Write succeeded: node 1 is the leader.
             LeaderAddress = Node1Address;
             FollowerAddress = Node2Address;
             IsAvailable = true;
         }
         catch (NotLeaderException)
         {
-            // Node 1 redirected us — node 2 is the leader.
+            // Node 1 redirected us: node 2 is the leader.
             LeaderAddress = Node2Address;
             FollowerAddress = Node1Address;
             IsAvailable = true;

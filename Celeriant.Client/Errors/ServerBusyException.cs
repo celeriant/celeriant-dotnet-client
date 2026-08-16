@@ -14,7 +14,7 @@ public class ServerBusyException : CeleriantClientException
     public ErrorResponse Error { get; }
 
     public ServerBusyException(ErrorResponse error)
-        : base("Server busy — retry after backoff")
+        : base("Server busy: retry after backoff")
     {
         Error = error;
     }

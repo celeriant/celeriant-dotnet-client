@@ -129,7 +129,7 @@ public sealed class EventSerializerIntegrationTests
             Schema = OrderPlacedJsonSchema,
         });
 
-        // Write a valid event — should succeed
+        // Write a valid event: should succeed
         var order = new OrderPlaced(1, 29.99m, "Bob");
         var writeReq = new WriteRequest
         {

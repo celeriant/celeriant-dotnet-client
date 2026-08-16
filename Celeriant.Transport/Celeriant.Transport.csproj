@@ -20,7 +20,9 @@
     <Description>Shared transport layer for Celeriant .NET clients: wire framing, zstd-dictionary compression, the Identify handshake, and the pooled TCP/TLS connection. Consumed by Celeriant.Client and Celeriant.Queue.Client; the body codec and message-type ids are injected per product.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://celeriant.io</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/celeriant/celeriant-db</RepositoryUrl>
+    <RepositoryUrl>https://github.com/celeriant/celeriant-dotnet-client</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <RepositoryType>git</RepositoryType>
     <PackageTags>celeriant;distributed-systems;wire-protocol;transport</PackageTags>
     <Copyright>Copyright (c) Celeriant contributors</Copyright>
@@ -38,4 +40,8 @@
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="..\icon.png" Pack="true" PackagePath="" />
+  </ItemGroup>
 </Project>

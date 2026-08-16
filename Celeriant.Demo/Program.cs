@@ -35,7 +35,7 @@ var jsonOptions = new JsonSerializerOptions
 // Seed accounts on startup
 await SeedAccounts(app.Services.GetRequiredService<ICeleriantPool>());
 
-// GET /api/accounts — metadata for frontend
+// GET /api/accounts: metadata for frontend
 app.MapGet("/api/accounts", () => Results.Json(new
 {
     accounts = DemoConstants.Accounts.Select(a => new { a.Id, a.Name }),
@@ -189,7 +189,7 @@ app.MapPost("/api/transfers", async (TransferRequest req, ICeleriantPool pool) =
     }
 });
 
-// GET /api/watch/stream — SSE endpoint for live aggregate updates
+// GET /api/watch/stream: SSE endpoint for live aggregate updates
 app.MapGet("/api/watch/stream", async (HttpContext context, WatchBroadcaster broadcaster) =>
 {
     context.Response.ContentType = "text/event-stream";
@@ -266,7 +266,7 @@ async Task SeedAccounts(ICeleriantPool pool)
         }
         catch (AggregateNotFoundException)
         {
-            // Doesn't exist yet — seed it
+            // Doesn't exist yet: seed it
         }
 
         var evt = AggregateEventExtensions.Create(1L, new Deposited(seedCents), serializer);

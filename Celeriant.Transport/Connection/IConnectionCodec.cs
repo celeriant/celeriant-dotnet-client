@@ -2,7 +2,7 @@ namespace Celeriant.Transport;
 
 /// <summary>
 /// The per-product seam over the shared transport. Supplies the protocol version stamped on
-/// every frame, the Identify message-type ids, and how to (de)serialize the Identify body — which
+/// every frame, the Identify message-type ids, and how to (de)serialize the Identify body: which
 /// is the only typed payload the connection itself touches. All other request/response bodies pass
 /// through the connection as opaque bytes; the product encodes/decodes them with the same codec.
 /// </summary>

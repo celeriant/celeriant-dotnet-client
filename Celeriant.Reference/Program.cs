@@ -213,7 +213,7 @@ app.MapPost("/api/transfers", async (
     }
 });
 
-// ─────────────────── GET /api/watch/stream — SSE ───────────────────
+// ─────────────────── GET /api/watch/stream: SSE ───────────────────
 
 app.MapGet("/api/watch/stream", async (HttpContext context, WatchBroadcaster broadcaster) =>
 {
@@ -336,7 +336,7 @@ async Task SeedAccounts(ICeleriantPool pool, NpgsqlDataSource db)
         }
         catch (AggregateNotFoundException)
         {
-            // Doesn't exist yet — seed it
+            // Doesn't exist yet: seed it
         }
 
         // Guarded on version 0: every replica runs this at boot, and two booting

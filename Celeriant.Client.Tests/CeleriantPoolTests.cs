@@ -8,7 +8,7 @@ namespace Celeriant.Client.Tests;
 
 /// <summary>
 /// Unit tests for CeleriantPool routing, failover, and leader discovery logic.
-/// Uses mock INodeConnectionPool instances — no real TCP connections.
+/// Uses mock INodeConnectionPool instances: no real TCP connections.
 /// </summary>
 public class CeleriantPoolTests
 {
@@ -138,7 +138,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — leader routing
+    // Write: leader routing
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -160,7 +160,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — NotLeaderException with leader address triggers failover
+    // Write: NotLeaderException with leader address triggers failover
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -191,7 +191,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — NotLeaderException without address tries next node
+    // Write: NotLeaderException without address tries next node
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -221,7 +221,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — ConnectionFailedException tries next node
+    // Write: ConnectionFailedException tries next node
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -244,7 +244,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — all nodes unreachable
+    // Write: all nodes unreachable
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -266,7 +266,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — NotLeaderException with no address and no untried nodes
+    // Write: NotLeaderException with no address and no untried nodes
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -291,7 +291,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — leader discovery creates new node pool
+    // Write: leader discovery creates new node pool
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -323,7 +323,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Write — generic error propagated
+    // Write: generic error propagated
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -344,7 +344,7 @@ public class CeleriantPoolTests
     }
 
     // -----------------------------------------------------------------------
-    // Read — round-robin distribution
+    // Read: round-robin distribution
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -380,6 +380,67 @@ public class CeleriantPoolTests
         var result = await pool.ReadAsync(MakeReadRequest());
 
         Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LeaderDialTimeout_FailsOverToNextNode()
+    {
+        // A black-holed leader (connect timeout, not refused) must not kill the read.
+        var timingOutMock = MockPoolThatThrows("node1:10000", new ConnectionTimeoutException("dial timed out"));
+        var successMock = MockPoolThatSucceeds("node2:10000", SuccessReadResponse());
+
+        var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
+        {
+            ["node1:10000"] = timingOutMock,
+            ["node2:10000"] = successMock,
+        };
+        var options = MakeOptions("node1:10000", seeds: ["node2:10000"]);
+
+        await using var pool = CreatePool(options, mocks);
+        var result = await pool.ReadAsync(MakeReadRequest());
+
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LeaderServerBusy_PropagatesInsteadOfReadingFollower()
+    {
+        // Busy is not failover: silently downgrading the read to a follower loses read-your-writes.
+        var busyMock = MockPoolThatThrows("node1:10000", new ServerBusyException(new ErrorResponse()));
+        var successMock = MockPoolThatSucceeds("node2:10000", SuccessReadResponse());
+
+        var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
+        {
+            ["node1:10000"] = busyMock,
+            ["node2:10000"] = successMock,
+        };
+        var options = MakeOptions("node1:10000", seeds: ["node2:10000"]);
+
+        await using var pool = CreatePool(options, mocks);
+        await Assert.ThrowsAsync<ServerBusyException>(() => pool.ReadAsync(MakeReadRequest()));
+        successMock.Verify(
+            p => p.ExecuteRequestAsync(It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LeaderRequestTimeout_PropagatesInsteadOfReadingFollower()
+    {
+        var timeoutMock = MockPoolThatThrows("node1:10000", new CeleriantTimeoutException("request timed out"));
+        var successMock = MockPoolThatSucceeds("node2:10000", SuccessReadResponse());
+
+        var mocks = new Dictionary<string, Mock<INodeConnectionPool>>
+        {
+            ["node1:10000"] = timeoutMock,
+            ["node2:10000"] = successMock,
+        };
+        var options = MakeOptions("node1:10000", seeds: ["node2:10000"]);
+
+        await using var pool = CreatePool(options, mocks);
+        await Assert.ThrowsAsync<CeleriantTimeoutException>(() => pool.ReadAsync(MakeReadRequest()));
+        successMock.Verify(
+            p => p.ExecuteRequestAsync(It.IsAny<ClientRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

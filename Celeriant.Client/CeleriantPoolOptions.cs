@@ -11,10 +11,9 @@ public sealed class CeleriantPoolOptions
     public required string Address { get; init; }
 
     /// <summary>
-    /// Additional server addresses for failover and read distribution.
-    /// The pool creates connections to all seed addresses and distributes non-leader
-    /// operations across them via round-robin. New nodes discovered through leader
-    /// failover are added automatically.
+    /// Additional server addresses for failover and follower read routing.
+    /// The pool creates connections to all seed addresses; new nodes discovered
+    /// through leader failover are added automatically.
     /// </summary>
     public IReadOnlyList<string>? SeedAddresses { get; init; }
 
@@ -53,9 +52,11 @@ public sealed class CeleriantPoolOptions
     public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromSeconds(25);
 
     /// <summary>
-    /// When true, read operations (read, aggregate details, list, watch) are routed only to
-    /// follower nodes, keeping the leader free for writes. Falls back to the leader if no
-    /// followers are available. Default: false (reads go to any node).
+    /// When true, read operations (read, aggregate details, list, watch) are routed to
+    /// follower nodes, keeping the leader free for writes: sheds leader load but gives up
+    /// read-your-writes (followers can lag). The leader remains the last resort: if every
+    /// follower fails, reads and watches are served by the leader rather than failing.
+    /// Default: false (reads go to the leader).
     /// </summary>
     public bool RouteReadsToFollowers { get; init; }
 }

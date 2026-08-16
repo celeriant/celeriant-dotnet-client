@@ -237,7 +237,7 @@ public static class ListExtensions
     {
         // Because the same aggregate can appear on multiple shards (and stats must be merged
         // across all shards before yielding), we must fully accumulate before yielding.
-        // Key: aggregate_id (unique per (org, type, aggregate) triple — but we also key on
+        // Key: aggregate_id (unique per (org, type, aggregate) triple: but we also key on
         // the full triple in case the caller passes no org/type filter and IDs collide).
         var accumulated = new Dictionary<(Guid orgId, Guid typeId, Guid aggId), AggregateStats>();
         var firstSeenOrder = new List<(Guid orgId, Guid typeId, Guid aggId)>();

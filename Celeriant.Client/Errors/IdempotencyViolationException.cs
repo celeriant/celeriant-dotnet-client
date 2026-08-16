@@ -4,7 +4,7 @@ namespace Celeriant.Client.Errors;
 
 /// <summary>
 /// Thrown when a write is rejected because the client seq has already been accepted (error 2002).
-/// This means the event was already written — the write is a duplicate and was safely rejected.
+/// This means the event was already written: the write is a duplicate and was safely rejected.
 /// No action is needed; the original write succeeded.
 /// </summary>
 public class IdempotencyViolationException : WriteErrorException

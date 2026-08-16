@@ -17,10 +17,12 @@ namespace Celeriant.Client;
 /// Maintains per-node connection pools and routes operations based on their requirements:
 /// <list type="bullet">
 ///   <item><b>Leader operations</b> (write, delete, trim, register schema) are sent to the current leader
-///   with automatic failover — if the server responds with <see cref="NotLeaderException"/>,
+///   with automatic failover: if the server responds with <see cref="NotLeaderException"/>,
 ///   the pool updates its leader address and retries transparently.</item>
 ///   <item><b>Read operations</b> (read, aggregate details, list, watch)
-///   are distributed across all known nodes via round-robin, offloading the leader.</item>
+///   go to the current leader by default, so reads see their own writes. Set
+///   <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> to route them to followers
+///   instead (rotated for spread): sheds leader load, gives up read-your-writes.</item>
 /// </list>
 /// </para>
 ///
@@ -46,7 +48,7 @@ public sealed class CeleriantPool : ICeleriantPool
     // The address believed to be the current leader. Updated on failover.
     private volatile string _leaderAddress;
 
-    // Round-robin counter for distributing non-leader operations across nodes.
+    // Rotation counter for spreading opt-in follower reads across nodes.
     private int _roundRobinIndex;
 
     private bool _disposed;
@@ -82,11 +84,12 @@ public sealed class CeleriantPool : ICeleriantPool
     }
 
     // -------------------------------------------------------------------------
-    // Typed methods — non-leader operations (any node, round-robin)
+    // Typed methods: read operations (leader by default, followers opt-in)
     // -------------------------------------------------------------------------
 
     /// <summary>Send a read request and return the typed response.
-    /// Distributed across all known nodes via round-robin.</summary>
+    /// Routed to the leader by default (read-your-writes); to followers when
+    /// <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.</summary>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">All known nodes are unreachable.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
@@ -105,7 +108,8 @@ public sealed class CeleriantPool : ICeleriantPool
             ct);
 
     /// <summary>Send an aggregate details request and return the typed response.
-    /// Distributed across all known nodes via round-robin.</summary>
+    /// Routed to the leader by default (read-your-writes); to followers when
+    /// <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.</summary>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">All known nodes are unreachable.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
@@ -124,7 +128,7 @@ public sealed class CeleriantPool : ICeleriantPool
             ct);
 
     // -------------------------------------------------------------------------
-    // Typed methods — leader operations (write/delete/trim/schema with failover)
+    // Typed methods: leader operations (write/delete/trim/schema with failover)
     // -------------------------------------------------------------------------
 
     /// <summary>Send a register-schema request and return the typed response.
@@ -175,7 +179,7 @@ public sealed class CeleriantPool : ICeleriantPool
     /// <param name="key">The aggregate to write to.</param>
     /// <param name="events">One or more events to append.</param>
     /// <param name="clientId">Client ID scoping client-seq idempotency. Use a stable ID per
-    /// logical writer — never a fresh random value per call, or idempotency silently stops working.</param>
+    /// logical writer: never a fresh random value per call, or idempotency silently stops working.</param>
     /// <param name="allowCreate">Whether to create the aggregate if it does not exist. Defaults to <c>true</c>.</param>
     /// <param name="expectedVersion">If set, the server rejects the write unless the aggregate's
     /// current max event batch index matches this value (optimistic concurrency control).</param>
@@ -244,7 +248,7 @@ public sealed class CeleriantPool : ICeleriantPool
             ct);
 
     // -------------------------------------------------------------------------
-    // Streaming read (any node)
+    // Streaming read (read-routed: leader by default)
     // -------------------------------------------------------------------------
 
     /// <summary>
@@ -276,7 +280,7 @@ public sealed class CeleriantPool : ICeleriantPool
     }
 
     // -------------------------------------------------------------------------
-    // List operations (any node)
+    // List operations (read-routed: leader by default)
     // -------------------------------------------------------------------------
 
     /// <summary>
@@ -346,12 +350,14 @@ public sealed class CeleriantPool : ICeleriantPool
     }
 
     // -------------------------------------------------------------------------
-    // Watch (dedicated connection, not pooled — any node)
+    // Watch (dedicated connection, not pooled: read-routed)
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Open a dedicated watch connection. This connection is NOT pooled; the caller owns its
-    /// lifetime and must dispose it when done. The connection is established to any available node.
+    /// lifetime and must dispose it when done. Dials the current leader by default, a follower
+    /// when <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set; on connect failure
+    /// it falls through to the remaining known nodes.
     /// </summary>
     /// <exception cref="ConnectionFailedException">No reachable node could be found.</exception>
     /// <exception cref="CeleriantTimeoutException">The connection or handshake timed out.</exception>
@@ -361,19 +367,23 @@ public sealed class CeleriantPool : ICeleriantPool
         WatchOptions? options = null,
         CancellationToken ct = default)
     {
-        var watchOptions = options ?? new WatchOptions
+        // Pool TLS/identity always apply (mirrors the Rust client); caller keeps
+        // shard routing fields, and the dial timeout defaults to the pool's.
+        var watchOptions = new WatchOptions
         {
+            StartShard = options?.StartShard ?? 0,
+            MaxShardHint = options?.MaxShardHint,
             TlsConfig = _options.TlsConfig,
             IdentityConfig = _options.IdentityConfig,
+            ConnectionTimeout = options?.ConnectionTimeout ?? _options.ConnectionTimeout,
         };
 
-        // Try each read-eligible node until one connects successfully.
+        // Try each candidate in routing order (leader first by default,
+        // rotated followers on opt-in) until one connects.
         var nodeAddresses = GetReadNodeAddresses();
-        int startIdx = (int)((uint)Interlocked.Increment(ref _roundRobinIndex) % (uint)nodeAddresses.Length);
-
         for (int i = 0; i < nodeAddresses.Length; i++)
         {
-            var addr = nodeAddresses[(startIdx + i) % nodeAddresses.Length];
+            var addr = nodeAddresses[i];
             try
             {
                 return await WatchConnection.ConnectAsync(addr, request, watchOptions, ct)
@@ -383,20 +393,23 @@ public sealed class CeleriantPool : ICeleriantPool
             {
                 // Try next node.
             }
+            catch (ConnectionTimeoutException) when (i < nodeAddresses.Length - 1)
+            {
+                // Dial timeout: failover-class, try next.
+            }
         }
 
-        // Single node or all failed — let the exception propagate naturally.
-        return await WatchConnection.ConnectAsync(nodeAddresses[startIdx % nodeAddresses.Length], request, watchOptions, ct)
-            .ConfigureAwait(false);
+        throw new ConnectionFailedException("No reachable node for watch connection.");
     }
 
     // -------------------------------------------------------------------------
-    // Low-level: lease a raw connection (any node)
+    // Low-level: lease a raw connection (read-routed)
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Borrow a connection from the pool for manual low-level use.
-    /// The connection may be to any available node (round-robin).
+    /// Routed like reads: the leader by default, a follower when
+    /// <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.
     /// Dispose the returned <see cref="PooledConnection"/> to return it to the pool.
     /// </summary>
     public Task<PooledConnection> GetConnectionAsync(CancellationToken ct = default)
@@ -434,31 +447,33 @@ public sealed class CeleriantPool : ICeleriantPool
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Get a connection to a node eligible for read operations, cycling via round-robin.
-    /// Respects <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/>.
-    /// On <see cref="ConnectionFailedException"/>, tries the next node.
+    /// Get a connection from the read-routing candidate set (leader by default,
+    /// rotated followers on opt-in). On connection-establishment failure
+    /// (refused or dial timeout), tries the next candidate in order.
     /// </summary>
     private async Task<PooledConnection> GetAnyConnectionAsync(CancellationToken ct)
     {
         ThrowIfDisposed();
 
         var nodeAddresses = GetReadNodeAddresses();
-        int startIdx = (int)((uint)Interlocked.Increment(ref _roundRobinIndex) % (uint)nodeAddresses.Length);
-
         for (int i = 0; i < nodeAddresses.Length; i++)
         {
-            var addr = nodeAddresses[(startIdx + i) % nodeAddresses.Length];
+            var addr = nodeAddresses[i];
             try
             {
-                return await _nodePools[addr].GetConnectionAsync(ct).ConfigureAwait(false);
+                return await GetOrCreateNodePool(addr).GetConnectionAsync(ct).ConfigureAwait(false);
             }
             catch (ConnectionFailedException) when (i < nodeAddresses.Length - 1)
             {
                 // Node unreachable, try next.
             }
+            catch (ConnectionTimeoutException) when (i < nodeAddresses.Length - 1)
+            {
+                // Dial timeout (black-holed node): failover-class, try next.
+            }
         }
 
-        // All skipped — fall through to throw from the last node.
+        // All skipped: fall through to throw from the last node.
         throw new ConnectionFailedException("All known nodes are unreachable.");
     }
 
@@ -472,19 +487,50 @@ public sealed class CeleriantPool : ICeleriantPool
         => _nodePools.GetOrAdd(address, addr => _poolFactory(addr, _options, _dictCache));
 
     /// <summary>
-    /// Returns the node addresses eligible for read operations.
-    /// When <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set, excludes the
-    /// leader — unless no followers are available (single-node setup).
+    /// Ordered read candidates honoring <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/>.
+    /// Default: the current leader first so reads see their own writes; the remaining nodes
+    /// are connection-failure fallback only. Opt-in: followers rotated to spread load, then
+    /// the leader LAST: reached only when every follower failed, so a follower outage
+    /// degrades to leader reads instead of a read outage.
     /// </summary>
-    private string[] GetReadNodeAddresses()
+    internal string[] GetReadNodeAddresses()
     {
         var all = _nodePools.Keys.ToArray();
-        if (!_options.RouteReadsToFollowers || all.Length <= 1)
-            return all;
-
         var leader = _leaderAddress;
+        if (!_options.RouteReadsToFollowers)
+        {
+            return all.Contains(leader)
+                ? [leader, .. all.Where(a => a != leader)]
+                : [leader, .. all];
+        }
+
         var followers = all.Where(a => a != leader).ToArray();
-        return followers.Length > 0 ? followers : all;
+        if (followers.Length > 1)
+        {
+            int start = (int)((uint)Interlocked.Increment(ref _roundRobinIndex) % (uint)followers.Length);
+            return [.. followers[start..], .. followers[..start], leader];
+        }
+        return [.. followers, leader];
+    }
+
+    /// <summary>
+    /// Address a watch subscription dials first: the leader by default, a rotating
+    /// follower on opt-in.
+    /// </summary>
+    internal string GetWatchAddress()
+    {
+        var addrs = GetReadNodeAddresses();
+        return addrs.Length > 0 ? addrs[0] : _leaderAddress;
+    }
+
+    /// <summary>
+    /// Test hook: set the cached leader and register its node pool, mirroring
+    /// what write-path leader discovery does.
+    /// </summary>
+    internal void SetLeaderForTesting(string address)
+    {
+        GetOrCreateNodePool(address);
+        _leaderAddress = address;
     }
 
     // -------------------------------------------------------------------------
@@ -492,9 +538,13 @@ public sealed class CeleriantPool : ICeleriantPool
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Execute a non-leader operation on a read-eligible node with failover.
-    /// Respects <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/>.
-    /// On <see cref="ConnectionFailedException"/>, tries the next node in round-robin order.
+    /// Execute a read-class operation across <see cref="GetReadNodeAddresses"/> in order
+    /// (leader-pinned by default, rotated followers on opt-in).
+    ///
+    /// <para>Connection-establishment failures (refused or dial timeout) skip to the next
+    /// candidate. In leader-pinned mode <see cref="ServerBusyException"/> and request
+    /// timeouts propagate to the caller rather than silently downgrading the read to a
+    /// follower; on opt-in they skip to the next follower as before.</para>
     /// </summary>
     private async Task<T> ExecuteOnAnyNodeAsync<T>(
         ClientRequest request,
@@ -502,23 +552,33 @@ public sealed class CeleriantPool : ICeleriantPool
         CancellationToken ct)
     {
         var nodeAddresses = GetReadNodeAddresses();
-        int startIdx = (int)((uint)Interlocked.Increment(ref _roundRobinIndex) % (uint)nodeAddresses.Length);
+        bool toFollowers = _options.RouteReadsToFollowers;
 
         for (int i = 0; i < nodeAddresses.Length; i++)
         {
-            var addr = nodeAddresses[(startIdx + i) % nodeAddresses.Length];
+            var addr = nodeAddresses[i];
+            bool lastCandidate = i == nodeAddresses.Length - 1;
 
             try
             {
-                var response = await _nodePools[addr].ExecuteRequestAsync(request, ct)
+                var response = await GetOrCreateNodePool(addr).ExecuteRequestAsync(request, ct)
                     .ConfigureAwait(false);
                 return mapResponse(response);
             }
-            catch (ConnectionFailedException) when (i < nodeAddresses.Length - 1)
+            catch (ConnectionFailedException) when (!lastCandidate)
             {
                 continue;
             }
-            catch (ServerBusyException) when (i < nodeAddresses.Length - 1)
+            catch (ConnectionTimeoutException) when (!lastCandidate)
+            {
+                // Dial timeout (black-holed node): failover-class, unlike a request timeout.
+                continue;
+            }
+            catch (CeleriantTimeoutException) when (toFollowers && !lastCandidate)
+            {
+                continue;
+            }
+            catch (ServerBusyException) when (toFollowers && !lastCandidate)
             {
                 continue;
             }
@@ -532,9 +592,9 @@ public sealed class CeleriantPool : ICeleriantPool
     ///
     /// <para>Handles two failure modes:</para>
     /// <list type="bullet">
-    ///   <item><see cref="NotLeaderException"/> — the server reports a leader change.
+    ///   <item><see cref="NotLeaderException"/>: the server reports a leader change.
     ///   The pool updates its leader address (and discovers new nodes) and retries.</item>
-    ///   <item><see cref="ConnectionFailedException"/> — the leader is unreachable.
+    ///   <item><see cref="ConnectionFailedException"/>: the leader is unreachable.
     ///   The pool tries each known node until one accepts the write or redirects to the leader.</item>
     /// </list>
     /// </summary>
@@ -558,14 +618,16 @@ public sealed class CeleriantPool : ICeleriantPool
             {
                 var response = await pool.ExecuteRequestAsync(request, ct).ConfigureAwait(false);
 
-                // Write succeeded — this node is the leader.
+                // Write succeeded: this node is the leader.
                 _leaderAddress = currentTarget;
                 return mapResponse(response);
             }
             catch (NotLeaderException ex) when (ex.LeaderAddress is not null)
             {
-                _leaderAddress = ex.LeaderAddress;
+                // Register the pool before publishing the leader so concurrent
+                // reads never see an address without a backing pool.
                 GetOrCreateNodePool(ex.LeaderAddress);
+                _leaderAddress = ex.LeaderAddress;
                 currentTarget = ex.LeaderAddress;
                 // Recalculate max attempts since we may have discovered a new node.
                 maxAttempts = _nodePools.Count + 1;

@@ -7,8 +7,12 @@ namespace Celeriant.Transport;
 /// </summary>
 public interface ITransportExceptionFactory
 {
-    /// <summary>A request, connect, or handshake exceeded its timeout.</summary>
+    /// <summary>A request on an established connection exceeded its timeout.</summary>
     Exception Timeout(string message);
+
+    /// <summary>Connection establishment (dial, TLS handshake) exceeded its timeout.
+    /// Failover-class for callers, unlike a request timeout.</summary>
+    Exception ConnectTimeout(string message);
 
     /// <summary>The connection could not be established, was closed mid-operation, or failed I/O.</summary>
     Exception ConnectionFailed(string message, Exception? inner = null);

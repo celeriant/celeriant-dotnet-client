@@ -6,7 +6,7 @@ public class PooledConnectionTests
 {
     // PooledConnection's constructor is internal but InternalsVisibleTo is set.
     // CeleriantClient has a private constructor, so we can't create real instances.
-    // We test the contract via reflection for now — the behavioral tests are in
+    // We test the contract via reflection for now: the behavioral tests are in
     // integration tests where real CeleriantClient instances exist.
 
     [Fact]

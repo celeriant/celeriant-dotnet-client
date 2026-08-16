@@ -90,7 +90,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
         if (_totalSem.Wait(0))
             return await CreateGatedConnectionAsync(ct).ConfigureAwait(false);
 
-        // At the cap — wait for one to come back.
+        // At the cap: wait for one to come back.
         while (true)
         {
             ct.ThrowIfCancellationRequested();
@@ -144,7 +144,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             await _connectSem.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                // Re-check after waiting — breaker may have tripped while queued.
+                // Re-check after waiting: breaker may have tripped while queued.
                 if (IsCircuitOpen)
                     throw _ex.ConnectionFailed($"Circuit breaker open for {_address}.");
 

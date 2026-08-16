@@ -18,15 +18,15 @@ var key = new AggregateKey(
 );
 ```
 
-All three are `Guid`s. You define them. Celeriant doesn't care what they mean — it just guarantees ordering and isolation within each aggregate.
+All three are `Guid`s. You define them. Celeriant doesn't care what they mean: it just guarantees ordering and isolation within each aggregate.
 
 A few modelling examples:
 
-- `Acme Corp / Orders / order-123` — classic DDD aggregate
-- `Acme Corp / UserProfiles / user-456` — one stream per user
-- `Acme Corp / Devices / device-789` — one stream per IoT device
+- `Acme Corp / Orders / order-123`: classic DDD aggregate
+- `Acme Corp / UserProfiles / user-456`: one stream per user
+- `Acme Corp / Devices / device-789`: one stream per IoT device
 
-There's no cardinality limit. Millions of aggregates, billions of events. Celeriant's storage engine uses bloom filters and bounded memory — it won't fall over like a PostgreSQL index would.
+There's no cardinality limit. Millions of aggregates, billions of events. Celeriant's storage engine uses bloom filters and bounded memory: it won't fall over like a PostgreSQL index would.
 
 ## Connections and the pool
 
@@ -45,7 +45,8 @@ A single connection is fine for simple use cases, scripts, or admin tools. The c
 For production workloads, `CeleriantPool` is what you want. It manages a set of connections and routes operations to the right node:
 
 - **Writes** always go to the leader. If the leader moves (failover), the pool detects this and reroutes automatically.
-- **Reads** are distributed across all nodes via round-robin. Set `RouteReadsToFollowers = true` if you want to keep the leader free for writes.
+- **Reads** also go to the leader by default. This gives you read-your-writes: a read issued after a successful write sees that write.
+- **Follower reads** are explicit. Set `RouteReadsToFollowers = true` to send reads to followers and keep the leader free for writes. Follower reads are eventually consistent: a lagging follower returns whatever it has, including "aggregate does not exist" for an aggregate you just wrote. Only opt in if your read path tolerates stale data. If every follower is unreachable, reads and watches fall back to the leader rather than failing: a follower outage costs leader load, not availability.
 
 ```csharp
 await using var pool = new CeleriantPool(new CeleriantPoolOptions
@@ -72,7 +73,7 @@ Wire compression is automatic and requires no configuration. When the cluster us
 compression it ships a zstd dictionary to the client during the Identify handshake (cached and
 shared across pooled connections). The client then compresses large variable-size requests
 (writes, schema registration) with that dictionary and transparently decompresses responses.
-Clusters that don't use dictionary compression — and connections that never identify — send
+Clusters that don't use dictionary compression: and connections that never identify: send
 everything uncompressed.
 
 ### DI registration
@@ -176,7 +177,7 @@ Access levels are connection-scoped. ReadOnly blocks write/delete/trim/schema op
 
 ## Serialization
 
-Your events are domain objects — records, classes, whatever. You don't hand-serialize them to `byte[]`. The client has a built-in serialization layer that handles this.
+Your events are domain objects: records, classes, whatever. You don't hand-serialize them to `byte[]`. The client has a built-in serialization layer that handles this.
 
 ```csharp
 public record OrderPlaced(Guid OrderId, decimal Total, string Customer);
@@ -223,7 +224,7 @@ public interface IEventSerializer
 }
 ```
 
-Plug in MessagePack, Protobuf, Avro — whatever your team uses. Different event types can use different serializers in the same batch if needed.
+Plug in MessagePack, Protobuf, Avro: whatever your team uses. Different event types can use different serializers in the same batch if needed.
 
 ### Raw byte[] payloads
 
@@ -270,7 +271,7 @@ await client.WriteAsync(key, [
 
 ### Optimistic concurrency control
 
-Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteErrorException`. This is how you enforce business invariants at write time — no distributed locks needed.
+Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteErrorException`. This is how you enforce business invariants at write time: no distributed locks needed.
 
 ```csharp
 await client.WriteAsync(key, events,
@@ -286,13 +287,13 @@ try
 }
 catch (WriteOccException ex)
 {
-    // ex.ExpectedVersion — what you passed in
-    // ex.CurrentAggregateVersion — where the aggregate actually is
+    // ex.ExpectedVersion: what you passed in
+    // ex.CurrentAggregateVersion: where the aggregate actually is
     // Re-read, re-validate, retry
 }
 ```
 
-There is no automatic retry on OCC failures. That's by design — only your domain logic knows whether a retry is safe. Catch up to the tip of the aggregate event stream, re-validate your business rules, and try again.
+There is no automatic retry on OCC failures. That's by design: only your domain logic knows whether a retry is safe. Catch up to the tip of the aggregate event stream, re-validate your business rules, and try again.
 
 ### Exactly-once writes
 
@@ -310,7 +311,7 @@ This is the big one. In traditional event sourcing you pick a single aggregate a
 
 Celeriant lets you atomically write events across multiple aggregates in a single request, each with its own OCC guard. The server rejects the entire batch if any concurrency check fails. No partial writes, no distributed transactions.
 
-This is what Sara Pellegrini and Milan Savic call [Dynamic Consistency Boundaries](https://sara.event-thinking.io/2023/04/kill-aggregate-chapter-1-I-am-here-to-kill-the-aggregate.html) — your consistency boundary isn't baked into your aggregate design, it's defined at write time based on what the business rule actually needs.
+This is what Sara Pellegrini and Milan Savic call [Dynamic Consistency Boundaries](https://sara.event-thinking.io/2023/04/kill-aggregate-chapter-1-I-am-here-to-kill-the-aggregate.html): your consistency boundary isn't baked into your aggregate design, it's defined at write time based on what the business rule actually needs.
 
 ```csharp
 // Place an order: debit the account AND create the order atomically.
@@ -358,15 +359,15 @@ try
 catch (WriteOccException ex)
 {
     // Something changed between our read and write.
-    // Nothing was written — no partial state. Re-read, re-validate, retry.
+    // Nothing was written: no partial state. Re-read, re-validate, retry.
 }
 ```
 
 `ExpectedVersion = 0` means "this aggregate must not have any writes yet". It's how you guard creates. For existing aggregates, use the batch index you got from your last read. If anything has moved, the entire request is rejected atomically.
 
-This eliminates a whole class of problems that normally require sagas or two-phase commit. Transfer between two accounts? Atomic. Reserve inventory while placing an order? Atomic. Any business rule that spans aggregates within the same shard — list them in the same `WriteRequest`.
+This eliminates a whole class of problems that normally require sagas or two-phase commit. Transfer between two accounts? Atomic. Reserve inventory while placing an order? Atomic. Any business rule that spans aggregates within the same shard: list them in the same `WriteRequest`.
 
-The constraint: all aggregates in a single write must belong to the same shard. Shard assignment is deterministic (by aggregate ID, type, or org — configured server-side), so you know at design time which aggregates can participate in the same atomic write.
+The constraint: all aggregates in a single write must belong to the same shard. Shard assignment is deterministic (by aggregate ID, type, or org: configured server-side), so you know at design time which aggregates can participate in the same atomic write.
 
 ## Reading events
 
@@ -380,7 +381,7 @@ var response = await client.ReadAsync(new ReadRequest
 });
 ```
 
-`ReadFilters` supports a range of filtering options — event type, client ID, user ID, timestamp ranges, event index ranges. You don't have to pull everything and filter client-side.
+`ReadFilters` supports a range of filtering options: event type, client ID, user ID, timestamp ranges, event index ranges. You don't have to pull everything and filter client-side.
 
 ```csharp
 var filters = new ReadFilters
@@ -422,7 +423,7 @@ var details = await pool.AggregateDetailsAsync(new AggregateDetailsRequest
 
 ## Schemas
 
-Celeriant validates events against registered schemas at write time. This is server-side enforcement — malformed events are rejected before they hit the log.
+Celeriant validates events against registered schemas at write time. This is server-side enforcement: malformed events are rejected before they hit the log.
 
 A schema is scoped to an org, aggregate type, and event type version:
 
@@ -443,11 +444,11 @@ await pool.RegisterSchemaAsync(new RegisterSchemaRequest
 
 Supported schema types are `Json`, `Avro`, and `Protobuf`.
 
-Register your schemas as part of your deployment pipeline. When you introduce a breaking change, bump `EventTypeMajor` and register a new schema. Backwards-compatible changes bump `EventTypeMinor`. Old events remain valid — the schema only applies to new writes.
+Register your schemas as part of your deployment pipeline. When you introduce a breaking change, bump `EventTypeMajor` and register a new schema. Backwards-compatible changes bump `EventTypeMinor`. Old events remain valid: the schema only applies to new writes.
 
 ## Watching for changes
 
-The watch API gives you a live stream of changes happening across the cluster. This is how you build reactive read models, trigger side effects, or feed downstream systems — without polling.
+The watch API gives you a live stream of changes happening across the cluster. This is how you build reactive read models, trigger side effects, or feed downstream systems: without polling.
 
 ```csharp
 await using var watch = await pool.WatchAsync(new WatchRequest
@@ -463,8 +464,8 @@ while (!ct.IsCancellationRequested)
     foreach (var evt in response.Events)
     {
         // evt.OrgId, evt.AggregateTypeId, evt.AggregateId
-        // evt.Operation — Write, Create, Delete, TrimStart, etc.
-        // evt.FromAggregateVersion, evt.ToAggregateVersion — for writes
+        // evt.Operation: Write, Create, Delete, TrimStart, etc.
+        // evt.FromAggregateVersion, evt.ToAggregateVersion: for writes
     }
 }
 ```
@@ -473,7 +474,7 @@ Watch events tell you *what changed*, not *what the events contain*. You then re
 
 You can filter by org, aggregate type, specific aggregates, and operation types. Only subscribe to what you need.
 
-The watch connection handles multi-shard routing internally. You don't need to think about shards — the pool figures it out.
+The watch connection handles multi-shard routing internally. You don't need to think about shards: the pool figures it out.
 
 ## Trimming and deleting
 
@@ -511,8 +512,8 @@ await pool.DeleteAsync(new DeleteRequest
 
 Two flags control what happens after deletion:
 
-- `AllowRecreate` — can this aggregate be written to again? Set `false` for a permanent, irreversible delete.
-- `AllowSequenceContinuation` — if recreated, do event indices continue from where they left off, or restart from 1?
+- `AllowRecreate`: can this aggregate be written to again? Set `false` for a permanent, irreversible delete.
+- `AllowSequenceContinuation`: if recreated, do event indices continue from where they left off, or restart from 1?
 
 You can also pass `ExpectedVersion` for optimistic concurrency on deletes.
 
@@ -551,8 +552,8 @@ Compression is automatic, dictionary-based, and requires no configuration.
 When the cluster uses dictionary compression, it ships a zstd dictionary to the client during the
 Identify handshake. The pool caches that dictionary and shares it across connections (advertising
 its sha on each new connection so the server can skip resending the bytes). The client then
-compresses large variable-size requests — writes and schema registration whose payload is at least
-1&#160;KB — with that dictionary, and transparently decompresses any dictionary-compressed responses.
+compresses large variable-size requests: writes and schema registration whose payload is at least
+1&#160;KB: with that dictionary, and transparently decompresses any dictionary-compressed responses.
 
 There is nothing to configure and no per-request compression flag: a connection that has negotiated
 a dictionary compresses eligible requests automatically, and connections that never identify (or

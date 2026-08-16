@@ -6,7 +6,7 @@ namespace Celeriant.Transport;
 
 /// <summary>
 /// Low-level single-connection transport shared by every Celeriant .NET client. Owns one TCP
-/// (optionally TLS) connection; no pooling or auto-reconnect — a pool layer manages lifecycle and
+/// (optionally TLS) connection; no pooling or auto-reconnect: a pool layer manages lifecycle and
 /// leader failover. Handles the 17-byte wire framing, zstd-dictionary compression, and the
 /// celeriant_msg Identify handshake. The body codec and message-type ids come from the injected
 /// <see cref="IConnectionCodec"/>; transport failures are surfaced through the injected
@@ -85,7 +85,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
             }
             catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
             {
-                throw ex.Timeout($"Connection to {address} timed out after {connectionTimeout}.");
+                throw ex.ConnectTimeout($"Connection to {address} timed out after {connectionTimeout}.");
             }
             catch (Exception inner) when (inner is SocketException or IOException)
             {
@@ -103,7 +103,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
                 catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
                 {
                     await sslStream.DisposeAsync().ConfigureAwait(false);
-                    throw ex.Timeout($"TLS handshake with {address} timed out after {connectionTimeout}.");
+                    throw ex.ConnectTimeout($"TLS handshake with {address} timed out after {connectionTimeout}.");
                 }
                 catch (Exception inner) when (inner is IOException or System.Security.Authentication.AuthenticationException)
                 {
@@ -303,7 +303,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
     }
 
     /// <summary>
-    /// Read a single server-pushed frame without sending a request — used by watch connections,
+    /// Read a single server-pushed frame without sending a request: used by watch connections,
     /// where the server streams frames after the initial subscription.
     /// </summary>
     public async Task<RawFrame> ReadFrameAsync(CancellationToken ct = default)

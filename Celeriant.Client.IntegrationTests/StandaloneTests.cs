@@ -151,7 +151,7 @@ public sealed class StandaloneTests
     }
 
     // =========================================================================
-    // 5. OCC conflict — wrong expected batch index
+    // 5. OCC conflict: wrong expected batch index
     // =========================================================================
 
     [SkippableFact]
@@ -168,7 +168,7 @@ public sealed class StandaloneTests
     }
 
     // =========================================================================
-    // 6. Client idempotency — duplicate write is accepted
+    // 6. Client idempotency: duplicate write is accepted
     // =========================================================================
 
     [SkippableFact]
@@ -182,8 +182,8 @@ public sealed class StandaloneTests
             enforceIdempotency: true, clientId: clientId);
         Assert.IsType<ClientResponse.Write>(r1);
 
-        // Same client_id, same client_event_index — should be idempotent
-        // Should succeed (idempotent) or throw a write error — but not crash
+        // Same client_id, same client_event_index: should be idempotent
+        // Should succeed (idempotent) or throw a write error: but not crash
         try
         {
             var r2 = await WriteAsync(key, [MakeEvent(1, "idem-test")],
@@ -193,7 +193,7 @@ public sealed class StandaloneTests
         }
         catch (WriteErrorException)
         {
-            // Also acceptable — server may reject the duplicate
+            // Also acceptable: server may reject the duplicate
         }
     }
 
@@ -225,7 +225,7 @@ public sealed class StandaloneTests
         }));
         Assert.IsType<ClientResponse.TrimStart>(trimResp);
 
-        // Read from maxBatch onwards — only batch-2 should be present (throws on error)
+        // Read from maxBatch onwards: only batch-2 should be present (throws on error)
         var readResp = await Client.SendRequestAsync(new ClientRequest.Read(new ReadRequest
         {
             AggregateKey = key,
@@ -285,7 +285,7 @@ public sealed class StandaloneTests
         }
         catch (CeleriantErrorException)
         {
-            // Also acceptable — some servers don't return details for deleted aggregates
+            // Also acceptable: some servers don't return details for deleted aggregates
         }
     }
 

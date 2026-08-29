@@ -12,8 +12,10 @@ namespace Celeriant.Transport.Tests;
 /// Disposal that does not cancel first can strand a parked caller for ever and drop a freshly
 /// dialled connection with its socket open. The <c>Bcl_</c> tests pin the platform behaviour
 /// those failure modes rest on — a pending <c>SemaphoreSlim.WaitAsync</c> is not completed by
-/// disposing the semaphore, and cannot be cancelled afterwards — which is why the pool cancels
-/// before it disposes.
+/// disposing the semaphore, and cannot be cancelled afterwards. Cancelling first is necessary
+/// but not sufficient: the cancellation completes the wait <em>asynchronously</em>, so a dispose
+/// that follows the cancel can still win the race and strand the waiter — which is why the pool
+/// wakes waiters by cancellation and never disposes its semaphores at all.
 /// </para>
 /// </summary>
 public class ConnectionPoolDisposalTests(ITestOutputHelper output)

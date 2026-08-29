@@ -34,14 +34,13 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
     private volatile bool _disposed;
 
     /// <summary>
-    /// Cancelled at the START of disposal, while the semaphores are still alive.
+    /// Cancelled at the start of disposal to wake every parked caller.
     ///
     /// <para>
-    /// <c>SemaphoreSlim.Dispose()</c> does not complete a wait that is already pending — it does
-    /// not fault it, cancel it, or grant it; the wait simply never returns, and once the semaphore
-    /// is disposed a cancellation can no longer reach it either. So a caller parked at the cap
-    /// when the pool goes away would hang for ever, which is the failure this whole wait loop
-    /// exists to prevent. Cancelling first is what lets those waits complete.
+    /// A caller at the cap parks on <c>_totalSem.WaitAsync</c> until a permit or an idle
+    /// connection comes back, and neither ever comes back from a disposed pool. This token is the
+    /// only exit. The semaphores themselves are never disposed — see <see cref="DisposeAsync"/>
+    /// for why disposing them would race this cancellation and strand the caller anyway.
     /// </para>
     /// </summary>
     private readonly CancellationTokenSource _disposing = new();
@@ -119,21 +118,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             // ever post to again.
             using var race = CancellationTokenSource.CreateLinkedTokenSource(ct, _disposing.Token);
             var idleTask = _idle.Reader.ReadAsync(race.Token).AsTask();
-
-            Task slotTask;
-            try
-            {
-                slotTask = _totalSem.WaitAsync(race.Token);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Disposed between the top of the loop and here. The channel read is already in
-                // flight and may have taken an entry with it, so it still has to be reconciled —
-                // no lease was made, and nothing else can close that connection.
-                race.Cancel();
-                await DisposeIdleResultAsync(idleTask).ConfigureAwait(false);
-                throw DisposedError();
-            }
+            var slotTask = _totalSem.WaitAsync(race.Token);
 
             await Task.WhenAny(idleTask, slotTask).ConfigureAwait(false);
             race.Cancel();
@@ -198,22 +183,27 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             return;
         _disposed = true;
 
-        // Cancel before disposing anything: `Cancel()` runs the waiters' registrations
-        // synchronously, so every pending wait is completed while its semaphore is still alive.
-        // Disposing first would leave those waits permanently unfinishable.
+        // Wake every parked caller. No Release() is coming once the pool is dead, so a caller
+        // parked at the cap leaves through this cancellation or not at all.
         _disposing.Cancel();
 
         _idle.Writer.TryComplete();
         while (_idle.Reader.TryRead(out var entry))
             await DisposeQuietly(entry.client).ConfigureAwait(false);
-        _connectSem.Dispose();
-        _totalSem.Dispose();
 
-        // `_disposing` is deliberately NOT disposed. Callers still in flight read its Token to
-        // build their race source, and a disposed CancellationTokenSource throws on that read —
-        // which would just trade the hang this exists to prevent for a different exception in the
-        // same window. A cancelled source holds nothing worth reclaiming; the registrations
-        // against it are owned by each caller's `using var race`.
+        // The semaphores are deliberately NOT disposed. SemaphoreSlim completes a cancelled
+        // `WaitAsync` *asynchronously* — the cancellation callback only queues the completion —
+        // so a Dispose() here races the wakeup the Cancel() above just started: Dispose() drops
+        // the semaphore's internal waiter list without completing the waits, and a waiter whose
+        // queued cancellation then finds itself already delisted falls back to awaiting a task
+        // nothing will ever complete. Leaving the semaphores alive costs nothing (SemaphoreSlim
+        // owns an OS handle only once AvailableWaitHandle has been touched, which this pool never
+        // does) and lets every in-flight cancellation land on a live semaphore.
+        //
+        // `_disposing` is deliberately NOT disposed either. Callers still in flight read its
+        // Token to build their race source, and a disposed CancellationTokenSource throws on that
+        // read. A cancelled source holds nothing worth reclaiming; the registrations against it
+        // are owned by each caller's `using var race`.
     }
 
     // -------------------------------------------------------------------------
@@ -276,14 +266,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             }
             finally
             {
-                // Guarded like the permit release. A throw from `finally` discards the value the
-                // `return` above was carrying, so an ObjectDisposedException here would drop a
-                // freshly dialled connection on the floor with its socket open.
-                if (!_disposed)
-                {
-                    try { _connectSem.Release(); }
-                    catch (ObjectDisposedException) { /* disposed between the check and the release */ }
-                }
+                _connectSem.Release();
             }
         }
         catch
@@ -319,8 +302,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
         if (_disposed)
             return false;
 
-        try { return _totalSem.Wait(0); }
-        catch (ObjectDisposedException) { return false; }
+        return _totalSem.Wait(0);
     }
 
     private void ThrowIfDisposed()
@@ -332,30 +314,16 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
     private Exception DisposedError()
         => _ex.ConnectionFailed($"Connection pool for {_address} has been disposed.");
 
-    /// <summary>Close whatever an abandoned channel read consumed. Nothing else can.</summary>
-    private static async ValueTask DisposeIdleResultAsync(Task<(TConn client, DateTimeOffset lastUsed)> idleTask)
-    {
-        try
-        {
-            var entry = await idleTask.ConfigureAwait(false);
-            await DisposeQuietly(entry.client).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { }
-        catch (ChannelClosedException) { }
-    }
-
     /// <summary>
     /// Give a permit back, unless the pool is going away. Disposal races every caller still in
-    /// flight, and a permit handed back to a disposed semaphore is not worth an exception —
-    /// there is no capacity left to account for.
+    /// flight, and once it has begun there is no capacity left to account for.
     /// </summary>
     private void ReleasePermit()
     {
         if (_disposed)
             return;
 
-        try { _totalSem.Release(); }
-        catch (ObjectDisposedException) { /* disposed between the check and the release */ }
+        _totalSem.Release();
     }
 
     private static async ValueTask DisposeQuietly(TConn client)

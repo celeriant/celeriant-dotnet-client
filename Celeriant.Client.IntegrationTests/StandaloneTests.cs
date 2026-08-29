@@ -381,6 +381,8 @@ public sealed class StandaloneTests
     [SkippableFact]
     public async Task Pool_WriteAndRead()
     {
+        Skip.If(!_fixture.IsAvailable, "Server not running");
+
         await using var pool = new CeleriantPool(new CeleriantPoolOptions
         {
             Address = _fixture.Address,

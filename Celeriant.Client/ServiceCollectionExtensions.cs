@@ -15,7 +15,7 @@ public static class ServiceCollectionExtensions
     /// <code>
     /// builder.Services.AddCeleriantPool(options =>
     /// {
-    ///     options.Address = "localhost:9200";
+    ///     options.Address = "localhost:10000";
     ///     options.MaxConnections = 20;
     /// });
     /// </code>

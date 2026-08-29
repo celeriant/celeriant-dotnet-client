@@ -35,7 +35,7 @@ docker run -d --name celeriant \
 ### 2. Connect and write an event
 
 ```csharp
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
 
 var serializer = JsonEventSerializer.Default;
 var key = new AggregateKey(orgId: myOrg, aggregateTypeId: myType, aggregateId: orderId);

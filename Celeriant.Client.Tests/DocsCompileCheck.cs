@@ -260,6 +260,23 @@ namespace Celeriant.Client.Tests.Docs.GuideCheck
             }
         }
 
+        // docs/guide.md — "Optimistic concurrency control": the single-aggregate read -> validate -> guarded-write loop.
+        private static async Task OccLoop(ICeleriantPool pool, AggregateKey key, AggregateEvent[] newEvents, Guid myClientId)
+        {
+            var state = await pool.ReadAsync(new ReadRequest { AggregateKey = key, Filters = ReadFilters.From(1) });
+            long tip = state.EventBatches.LastOrDefault()?.AggregateVersion ?? 0;
+
+            try
+            {
+                var result = await pool.WriteAsync(key, newEvents, myClientId, expectedVersion: tip);
+                long newTip = result.MaxAggregateVersion ?? tip;
+            }
+            catch (WriteOccException)
+            {
+                // Re-read from the new tip, re-validate, retry.
+            }
+        }
+
         // docs/guide.md — "Dynamic consistency boundaries"
         private static async Task DynamicConsistencyBoundaries(
             ICeleriantPool pool, IEventSerializer serializer, Guid orgId,

@@ -167,6 +167,8 @@ public sealed class ClusterTests
     [SkippableFact]
     public async Task Pool_WithBothNodes_WriteAndReadSucceed()
     {
+        SkipIfUnavailable();
+
         // Regardless of which node is leader, the pool should route writes to the leader.
         await using var pool = CreatePool(
             address: _fixture.Node1Address,

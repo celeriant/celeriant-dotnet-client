@@ -18,7 +18,7 @@ public interface ICeleriantClient : IAsyncDisposable
 
     /// <summary>Send a write request and return the typed response.</summary>
     /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation: the aggregate has been modified. Re-read and retry.</exception>
-    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write: the event was already accepted. No action needed.</exception>
+    /// <exception cref="Errors.IdempotencyViolationException">The client seq was already accepted. Safe to ignore only when retrying the identical write; otherwise the new event was rejected and not stored — read the seq back and compare EventId. See the exception's own docs.</exception>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist and <c>AllowCreate</c> is false.</exception>
     /// <exception cref="Errors.AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
     /// <exception cref="Errors.SchemaValidationException">An event payload does not conform to the registered schema.</exception>
@@ -30,7 +30,7 @@ public interface ICeleriantClient : IAsyncDisposable
 
     /// <summary>Write events to a single aggregate. Creates the aggregate if it does not exist.</summary>
     /// <exception cref="Errors.WriteOccException">Optimistic concurrency violation: the aggregate has been modified. Re-read and retry.</exception>
-    /// <exception cref="Errors.IdempotencyViolationException">Duplicate write: the event was already accepted. No action needed.</exception>
+    /// <exception cref="Errors.IdempotencyViolationException">The client seq was already accepted. Safe to ignore only when retrying the identical write; otherwise the new event was rejected and not stored — read the seq back and compare EventId. See the exception's own docs.</exception>
     /// <exception cref="Errors.AggregateNotFoundException">The aggregate does not exist and <paramref name="allowCreate"/> is false.</exception>
     /// <exception cref="Errors.AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
     /// <exception cref="Errors.SchemaValidationException">An event payload does not conform to the registered schema.</exception>

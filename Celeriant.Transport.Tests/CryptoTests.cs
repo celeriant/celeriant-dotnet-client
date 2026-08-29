@@ -151,9 +151,17 @@ public class CryptoTests
         byte[] publicKeyDer = Convert.FromBase64String(publicKeyBase64);
         byte[] hash         = SHA256.HashData(publicKeyDer);
 
-        // The Guid should be constructed from the first 16 bytes of the SHA-256 hash.
-        // We reconstruct the expected Guid using the same approach as the implementation.
-        var expectedGuid = new Guid(hash.AsSpan(0, 16));
+        // The identity is SHA-256(DER)[0..16] read as a little-endian u128 and rendered as a Guid —
+        // exactly what an identity-enforcing server accepts as the write ClientId. Building the
+        // expected value: reverse all 16 bytes (little-endian u128), then reorder the first three
+        // Guid groups (mixed-endian Guid layout).
+        byte[] b = hash.AsSpan(0, 16).ToArray();
+        Array.Reverse(b);
+        (b[0], b[3]) = (b[3], b[0]);
+        (b[1], b[2]) = (b[2], b[1]);
+        (b[4], b[5]) = (b[5], b[4]);
+        (b[6], b[7]) = (b[7], b[6]);
+        var expectedGuid = new Guid(b);
         var actualGuid   = CeleriantCrypto.GenerateClientIdentity(publicKeyBase64);
 
         Assert.Equal(expectedGuid, actualGuid);

@@ -21,6 +21,6 @@ public class TrimIndexOutOfRangeException : TrimErrorException
     public TrimIndexOutOfRangeException(ErrorResponse error) : base(error)
     {
         RequestedTrimIndex = error.GetLong("requested") ?? 0;
-        CurrentMaxBatchIndex = error.GetLong("max_event_batch_index") ?? 0;
+        CurrentMaxBatchIndex = error.GetLong("max_aggregate_version") ?? 0;
     }
 }

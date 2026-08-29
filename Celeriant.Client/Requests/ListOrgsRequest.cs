@@ -5,7 +5,7 @@ using Celeriant.Client.Protocol;
 namespace Celeriant.Client.Requests;
 
 [MessagePackObject]
-public sealed class ListOrgsRequest
+public sealed record ListOrgsRequest
 {
     [Key(0)]
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]

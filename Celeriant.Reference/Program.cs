@@ -14,21 +14,40 @@ using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
 
 var celeriantAddress = builder.Configuration["Celeriant:Address"] ?? "localhost:10000";
-var postgresConnStr = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=localhost;Database=celeriant_reference;Username=demo;Password=demo";
+
+// The two projection shapes. Same write loop, same dedup guarantees; they differ
+// only in where the projection cursor (and therefore the request-dedup index)
+// lives. Mirrors Rust main.rs's PROJECTION env selection. Default: Postgres.
+var projection = builder.Configuration["Projection"] ?? "Postgres";
+var useMemory = string.Equals(projection, "InMemory", StringComparison.OrdinalIgnoreCase);
+if (!useMemory && !string.Equals(projection, "Postgres", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException($"Projection must be 'Postgres' or 'InMemory', got '{projection}'.");
 
 builder.Services.AddCeleriantPool(options =>
 {
     options.Address = celeriantAddress;
 });
 
-builder.Services.AddSingleton(NpgsqlDataSource.Create(postgresConnStr));
 builder.Services.AddSingleton<WatchBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WatchBroadcaster>());
-builder.Services.AddScoped<AccountService>();
+
+if (useMemory)
+{
+    // In-memory projection: no Postgres. Singleton so the projection and its
+    // per-process response cache survive across requests.
+    builder.Services.AddSingleton<IAccountService, MemAccountService>();
+}
+else
+{
+    var postgresConnStr = builder.Configuration.GetConnectionString("Postgres")
+        ?? "Host=localhost;Database=celeriant_reference;Username=demo;Password=demo";
+    builder.Services.AddSingleton(NpgsqlDataSource.Create(postgresConnStr));
+    builder.Services.AddScoped<IAccountService, AccountService>();
+}
 
 var app = builder.Build();
 app.UseStaticFiles();
+app.Logger.LogInformation("Projection backend: {Projection}", useMemory ? "in-memory" : "postgres");
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -36,10 +55,12 @@ var jsonOptions = new JsonSerializerOptions
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
 };
 
-// Init Postgres schema + seed
-await InitDatabase(app.Services);
+// Init Postgres schema + seed. The in-memory backend never touches Postgres;
+// it folds its projection from the Celeriant stream instead.
+if (!useMemory)
+    await InitDatabase(app.Services);
 await SeedAccounts(app.Services.GetRequiredService<ICeleriantPool>(),
-    app.Services.GetRequiredService<NpgsqlDataSource>());
+    useMemory ? null : app.Services.GetRequiredService<NpgsqlDataSource>());
 
 // ─────────────────── GET /api/accounts ───────────────────
 
@@ -53,7 +74,7 @@ app.MapGet("/api/accounts", () => Results.Json(new
 app.MapGet("/api/accounts/{accountId}/balance", async (
     Guid accountId,
     long? minBatchIndex,
-    AccountService svc,
+    IAccountService svc,
     CancellationToken ct) =>
 {
     try
@@ -77,7 +98,7 @@ app.MapGet("/api/accounts/{accountId}/balance", async (
 app.MapGet("/api/accounts/{accountId}/history", async (
     Guid accountId,
     long? fromBatchIndex,
-    AccountService svc,
+    IAccountService svc,
     CancellationToken ct) =>
 {
     try
@@ -98,7 +119,7 @@ app.MapPost("/api/accounts/{accountId}/deposit", async (
     Guid accountId,
     AmountRequest req,
     HttpContext httpContext,
-    AccountService svc,
+    IAccountService svc,
     CancellationToken ct) =>
 {
     var eventId = RequestEventId(httpContext);
@@ -131,7 +152,7 @@ app.MapPost("/api/accounts/{accountId}/withdraw", async (
     Guid accountId,
     AmountRequest req,
     HttpContext httpContext,
-    AccountService svc,
+    IAccountService svc,
     CancellationToken ct) =>
 {
     var eventId = RequestEventId(httpContext);
@@ -172,7 +193,7 @@ app.MapPost("/api/accounts/{accountId}/withdraw", async (
 app.MapPost("/api/transfers", async (
     TransferRequest req,
     HttpContext httpContext,
-    AccountService svc,
+    IAccountService svc,
     CancellationToken ct) =>
 {
     var eventId = RequestEventId(httpContext);
@@ -309,18 +330,20 @@ async Task InitDatabase(IServiceProvider services)
 
 // ─────────────────── Seed ───────────────────
 
-async Task SeedAccounts(ICeleriantPool pool, NpgsqlDataSource db)
+async Task SeedAccounts(ICeleriantPool pool, NpgsqlDataSource? db)
 {
     var serializer = JsonEventSerializer.Default;
 
     foreach (var (name, id, seedCents) in Constants.Accounts)
     {
-        // Seed Postgres projection row
-        await using (var cmd = db.CreateCommand(@"
-            INSERT INTO account_balances (account_id, account_name, balance_cents, last_batch_index, last_client_event_index, updated_at)
-            VALUES (@id, @name, 0, 0, 0, now())
-            ON CONFLICT (account_id) DO NOTHING"))
+        // Seed Postgres projection row (Postgres backend only; the in-memory
+        // backend has no projection table to seed).
+        if (db is not null)
         {
+            await using var cmd = db.CreateCommand(@"
+                INSERT INTO account_balances (account_id, account_name, balance_cents, last_batch_index, last_client_event_index, updated_at)
+                VALUES (@id, @name, 0, 0, 0, now())
+                ON CONFLICT (account_id) DO NOTHING");
             cmd.Parameters.AddWithValue("id", id);
             cmd.Parameters.AddWithValue("name", name);
             await cmd.ExecuteNonQueryAsync();

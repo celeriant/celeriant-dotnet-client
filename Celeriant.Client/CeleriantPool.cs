@@ -33,6 +33,17 @@ namespace Celeriant.Client;
 /// </para>
 ///
 /// <para>
+/// Failover has two shapes. A leader that steps down gracefully answers with
+/// <see cref="NotLeaderException"/>, which the pool absorbs and retries transparently — the caller
+/// sees no error. A leader that <b>crashes</b> is different: until the cluster elects a new leader
+/// (typically a few seconds) there is no leader to route to, so leader operations during that window
+/// throw <see cref="ConnectionFailedException"/> ("connection refused", then briefly "circuit breaker
+/// open"). These are transient — retry with backoff and the write succeeds once the new leader is
+/// elected. The pool does not retry across the election window itself, because only the caller knows
+/// whether re-issuing a write that may or may not have landed is safe.
+/// </para>
+///
+/// <para>
 /// Thread-safety: this class is safe for concurrent use from multiple threads/async contexts.
 /// </para>
 /// </summary>
@@ -90,10 +101,12 @@ public sealed class CeleriantPool : ICeleriantPool
     /// <summary>Send a read request and return the typed response.
     /// Routed to the leader by default (read-your-writes); to followers when
     /// <see cref="CeleriantPoolOptions.RouteReadsToFollowers"/> is set.</summary>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist.</exception>
+    /// <exception cref="BatchIndexUnavailableException">The requested batch index has been trimmed. Re-read from <see cref="BatchIndexUnavailableException.MinimumAvailableVersion"/>.</exception>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">All known nodes are unreachable.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
-    /// <exception cref="ProtocolException">The server returned an unexpected response type.</exception>
+    /// <exception cref="ProtocolException">The server returned an unexpected response type, or a response page exceeded <see cref="CeleriantPoolOptions.MaxResponseSize"/>.</exception>
     /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
     public Task<ReadResponse> ReadAsync(
         ReadRequest request,
@@ -152,6 +165,14 @@ public sealed class CeleriantPool : ICeleriantPool
 
     /// <summary>Send a write request and return the typed response.
     /// Routed to the leader with automatic failover on leader change.</summary>
+    /// <returns>A <see cref="WriteResponse"/> whose <see cref="WriteResponse.MaxAggregateVersion"/> is
+    /// the aggregate's new version — for a single-aggregate write; <c>null</c> for a multi-aggregate one.</returns>
+    /// <exception cref="WriteOccException">Optimistic concurrency violation: re-read and retry.</exception>
+    /// <exception cref="IdempotencyViolationException">The client seq was already accepted; see the exception's docs before ignoring it.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist and <c>AllowCreate</c> is false.</exception>
+    /// <exception cref="AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
+    /// <exception cref="SchemaValidationException">An event payload does not conform to the registered schema.</exception>
+    /// <exception cref="ShardRoutingException">A multi-aggregate write targets aggregates on different shards.</exception>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
@@ -171,6 +192,11 @@ public sealed class CeleriantPool : ICeleriantPool
 
     /// <summary>Write events to a single aggregate. Creates the aggregate if it does not exist.
     /// Routed to the leader with automatic failover on leader change.</summary>
+    /// <exception cref="WriteOccException">Optimistic concurrency violation: re-read and retry.</exception>
+    /// <exception cref="IdempotencyViolationException">The client seq was already accepted; see the exception's docs before ignoring it.</exception>
+    /// <exception cref="AggregateNotFoundException">The aggregate does not exist and <paramref name="allowCreate"/> is false.</exception>
+    /// <exception cref="AggregateRecreateNotAllowedException">The aggregate was permanently deleted.</exception>
+    /// <exception cref="SchemaValidationException">An event payload does not conform to the registered schema.</exception>
     /// <exception cref="CeleriantErrorException">The server returned an application-level error.</exception>
     /// <exception cref="ConnectionFailedException">No reachable leader could be found.</exception>
     /// <exception cref="CeleriantTimeoutException">The request timed out.</exception>
@@ -367,6 +393,8 @@ public sealed class CeleriantPool : ICeleriantPool
         WatchOptions? options = null,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
+
         // Pool TLS/identity always apply (mirrors the Rust client); caller keeps
         // shard routing fields, and the dial timeout defaults to the pool's.
         var watchOptions = new WatchOptions
@@ -391,11 +419,12 @@ public sealed class CeleriantPool : ICeleriantPool
             }
             catch (ConnectionFailedException) when (i < nodeAddresses.Length - 1)
             {
-                // Try next node.
+                ClearLeaderIfItWasTheFirstCandidate(i, addr);
             }
             catch (ConnectionTimeoutException) when (i < nodeAddresses.Length - 1)
             {
                 // Dial timeout: failover-class, try next.
+                ClearLeaderIfItWasTheFirstCandidate(i, addr);
             }
         }
 
@@ -478,6 +507,36 @@ public sealed class CeleriantPool : ICeleriantPool
     }
 
     /// <summary>
+    /// Drop a cached leader that would not accept a connection, so the next watch or read does not
+    /// pay the same dead dial before failing over again. Only in leader-pinned mode, and only when
+    /// the leader was the candidate that failed: with follower routing the leader is the last
+    /// resort, not the first, and a follower failing says nothing about it.
+    /// </summary>
+    private void ClearLeaderIfItWasTheFirstCandidate(int candidateIndex, string refused)
+    {
+        if (_options.RouteReadsToFollowers || candidateIndex != 0)
+            return;
+
+        string? replacement = refused == _options.Address
+            ? _options.SeedAddresses?.FirstOrDefault(a => a != refused)
+            : _options.Address;
+
+        if (replacement is null || replacement == refused)
+            return;
+
+        // Register the pool before publishing the address, so a concurrent read never sees a leader
+        // with no backing pool — the same ordering the write path's redirect handling uses.
+        GetOrCreateNodePool(replacement);
+
+        // Only if the leader is still the node this call dialled. A write may have learned a better
+        // one from a NotLeader redirect while that dial was in flight, and a blind write here would
+        // throw away knowledge that is both fresher and better sourced than a refused connection.
+#pragma warning disable 420 // Interlocked is itself a full fence; the volatile read semantics are not lost.
+        Interlocked.CompareExchange(ref _leaderAddress, replacement, refused);
+#pragma warning restore 420
+    }
+
+    /// <summary>
     /// Get a connection to the current leader node.
     /// </summary>
     private Task<PooledConnection> GetLeaderConnectionAsync(CancellationToken ct)
@@ -551,6 +610,8 @@ public sealed class CeleriantPool : ICeleriantPool
         Func<ClientResponse, T> mapResponse,
         CancellationToken ct)
     {
+        ThrowIfDisposed();
+
         var nodeAddresses = GetReadNodeAddresses();
         bool toFollowers = _options.RouteReadsToFollowers;
 
@@ -603,6 +664,8 @@ public sealed class CeleriantPool : ICeleriantPool
         Func<ClientResponse, T> mapResponse,
         CancellationToken ct)
     {
+        ThrowIfDisposed();
+
         string currentTarget = _leaderAddress;
         var triedNodes = new HashSet<string>();
 

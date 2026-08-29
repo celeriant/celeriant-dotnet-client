@@ -35,7 +35,7 @@ There's no cardinality limit. Millions of aggregates, billions of events. Celeri
 Celeriant connections are plain TCP sockets. Not like PostgreSQL where each connection spawns a server process. There's no session state, no connection overhead worth worrying about. Connect, send requests, dispose.
 
 ```csharp
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
 ```
 
 A single connection is fine for simple use cases, scripts, or admin tools. The client reuses the TCP connection across multiple requests.
@@ -44,7 +44,7 @@ A single connection is fine for simple use cases, scripts, or admin tools. The c
 
 For production workloads, `CeleriantPool` is what you want. It manages a set of connections and routes operations to the right node:
 
-- **Writes** always go to the leader. If the leader moves (failover), the pool detects this and reroutes automatically.
+- **Writes** always go to the leader. If the leader steps down gracefully, the pool detects the redirect and reroutes automatically with no error. If the leader *crashes*, leader operations throw a transient `ConnectionFailedException` during the few-second election window until a new leader is elected — retry with backoff. (The pool does not retry across the election window itself, since only you know whether re-issuing a possibly-landed write is safe.)
 - **Reads** also go to the leader by default. This gives you read-your-writes: a read issued after a successful write sees that write.
 - **Follower reads** are explicit. Set `RouteReadsToFollowers = true` to send reads to followers and keep the leader free for writes. Follower reads are eventually consistent: a lagging follower returns whatever it has, including "aggregate does not exist" for an aggregate you just wrote. Only opt in if your read path tolerates stale data. If every follower is unreachable, reads and watches fall back to the leader rather than failing: a follower outage costs leader load, not availability.
 
@@ -143,7 +143,7 @@ var identity = ClientIdentityConfig.FromClientId(myServiceGuid);
 
 ### RSA key pair
 
-Generate an RSA-2048 keypair (DER-encoded, base64). Client identity is derived deterministically from the public key: `SHA-256(DER bytes)[0..16]` as a Guid (little-endian u128). Same keypair, same identity, on any server.
+Generate an RSA-2048 keypair (DER-encoded, base64). Client identity is derived deterministically from the public key: `SHA-256(DER bytes)[0..16]` as a big-endian u128 Guid — the same value the server computes and the same value `IdentifyAsync` returns. Same keypair, same identity, on any server. Always obtain it from `CeleriantCrypto.GenerateClientIdentity` (or the Guid returned by `IdentifyAsync`); do not build the Guid from the hash bytes yourself, or the byte order will not match what the server enforces.
 
 ```csharp
 // Generate once, persist the keypair
@@ -163,7 +163,7 @@ When the connection identifies, the client library generates a nonce (current ep
 
 ```csharp
 // Direct connection
-await using var client = await CeleriantClient.ConnectAsync("localhost:10000", ct: default);
+await using var client = await CeleriantClient.ConnectAsync("localhost:10000");
 await client.IdentifyAsync(identity);
 
 // Or via pool (identifies automatically on each new connection)
@@ -270,6 +270,8 @@ await client.WriteAsync(key, [
 
 `EventTypeMajor` and `EventTypeMinor` identify the event's schema version. Use major for breaking changes, minor for backwards-compatible additions. These tie into the schema registry (more on that below).
 
+> **One event per write can omit `clientSeq`** (it defaults to 1). But when you build **several** events for a single write, give each a distinct increasing `clientSeq` (1, 2, 3, …) — `Create` does not auto-number, so repeated `Create` calls all default to seq 1. The server does **not** dedupe duplicate seqs *within* a single write (both events store), so a collision silently corrupts your per-seq idempotency tracking; the client rejects an in-batch duplicate with `ArgumentException` when `EnforceClientIdempotency` is set. Dedup across *separate* writes (a reused seq that already landed) is what raises `IdempotencyViolationException`. See "Exactly-once writes" below.
+
 ### Optimistic concurrency control
 
 Pass `expectedVersion` to guard a write. If another writer has appended to the aggregate since you last read it, the write is rejected with a `WriteOccException`. This is how you enforce business invariants at write time: no distributed locks needed.
@@ -278,6 +280,29 @@ Pass `expectedVersion` to guard a write. If another writer has appended to the a
 await client.WriteAsync(key, events, myClientId,
     expectedVersion: currentBatchIndex);
 ```
+
+Where does `currentBatchIndex` come from? It is the aggregate's current **version** — the same number
+`WriteResponse.MaxAggregateVersion`, `AggregateDetailsResponse.MaxAggregateVersion`, and a read batch's
+`AggregateVersion` all report. The full single-aggregate read → validate → guarded-write loop:
+
+```csharp
+// 1. Read the current state and note the tip version.
+var state = await pool.ReadAsync(new ReadRequest { AggregateKey = key, Filters = ReadFilters.From(1) });
+long tip = state.EventBatches.LastOrDefault()?.AggregateVersion ?? 0;   // 0 = aggregate does not exist yet
+
+// 2. Run your domain logic over the events, then write guarded on that tip.
+try
+{
+    var result = await pool.WriteAsync(key, newEvents, myClientId, expectedVersion: tip);
+    // result.MaxAggregateVersion is the new tip.
+}
+catch (WriteOccException)
+{
+    // Someone else wrote since step 1. Re-read from the new tip, re-validate, retry.
+}
+```
+
+Use `expectedVersion: 0` to require that the aggregate does **not** yet exist (a guarded create).
 
 When a concurrency conflict happens, the exception tells you exactly what went wrong:
 

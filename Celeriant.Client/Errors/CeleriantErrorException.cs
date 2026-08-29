@@ -7,9 +7,12 @@ namespace Celeriant.Client.Errors;
 /// that is not handled by a more specific exception type.
 /// </summary>
 /// <remarks>
-/// <see cref="NotLeaderException"/> and <see cref="IdentityRequiredException"/> also represent
-/// server error responses but extend <see cref="CeleriantClientException"/> directly, not this class.
-/// Catching <c>CeleriantErrorException</c> alone will not catch those two exception types.
+/// <see cref="NotLeaderException"/>, <see cref="ServerBusyException"/> and
+/// <see cref="IdentityRequiredException"/> also represent server error responses but extend
+/// <see cref="CeleriantClientException"/> directly, not this class — they are handled specially
+/// (failover, backpressure retry, and identity respectively). Catching <c>CeleriantErrorException</c>
+/// alone will not catch those three; to also absorb backpressure, catch <see cref="ServerBusyException"/>
+/// explicitly, or catch <see cref="CeleriantClientException"/> for every server-side error at once.
 /// </remarks>
 public class CeleriantErrorException : CeleriantClientException
 {

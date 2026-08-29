@@ -4,8 +4,16 @@ namespace Celeriant.Client.Errors;
 
 /// <summary>
 /// Thrown when a write is rejected because the client seq has already been accepted (error 2002).
-/// This means the event was already written: the write is a duplicate and was safely rejected.
-/// No action is needed; the original write succeeded.
+///
+/// <para>
+/// This is safe to ignore <b>only</b> when you are retrying the identical write — the earlier
+/// attempt landed. It is <b>not</b> safe to ignore when a client seq may have been reused for
+/// different data, or when a <c>ClientId</c> is shared across concurrent writers: in those cases the
+/// event you just attempted was rejected and is <b>not</b> stored. The exception cannot tell the two
+/// apart. When in doubt, point-read the seq (<c>ReadFilters</c> with <c>MinClientSeq</c>/
+/// <c>MaxClientSeq</c> and <c>IncludeClientId</c>) and compare the <see cref="AggregateEvent.EventId"/>:
+/// yours means the prior attempt landed, a sibling's means your event never landed — re-derive and retry.
+/// </para>
 /// </summary>
 public class IdempotencyViolationException : WriteErrorException
 {

@@ -3,12 +3,11 @@ using Moq;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Blind-oracle routing tests for CeleriantPool read routing (session/goal.md).
-/// Written against the contract only, without reading the implementation.
-/// Mirrors celeriant-db/session/oracle_routing_tests.rs, adapted where the
-/// .NET contract diverges (leader starts as Options.Address; no clear_leader;
-/// unspecified tail order). Opt-in follows goal.md Amendment 2: rotated
-/// followers first, leader LAST as a last resort, never excluded.
+/// Blind-oracle routing tests for CeleriantPool read routing, written against the contract only,
+/// without reading the implementation. Mirrors the Rust client's routing oracle tests, adapted
+/// where the .NET contract diverges (leader starts as Options.Address, so it is never absent;
+/// unspecified tail order). With follower routing opted in: rotated followers first, leader LAST
+/// as a last resort, never excluded.
 /// </summary>
 public class OracleRoutingTests
 {
@@ -103,9 +102,10 @@ public class OracleRoutingTests
     [Fact]
     public async Task OracleDefaultLeaderResetToPrimaryFirst()
     {
-        // Adapted from oracle_default_clear_leader_reverts_to_primary_first:
-        // .NET has no clear_leader; setting the leader back to the primary is
-        // the closest analog.
+        // Adapted from oracle_default_clear_leader_reverts_to_primary_first. This pins the
+        // ROUTING consequence only — that a leader back at the primary puts the primary first —
+        // by setting it directly. It does not exercise the reset path itself; the tests that do
+        // are in WatchAddressParityTests and WatchAddressParityAdversarialTests.
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1", "c:1"]));
         pool.SetLeaderForTesting("b:1");
         pool.SetLeaderForTesting("p:1");
@@ -317,6 +317,9 @@ public class OracleRoutingTests
     }
 
     // Skipped (no .NET analog): Rust empty-primary case: Options.Address is required.
-    // Skipped (no .NET analog): Rust clear_leader pin-to-seed quirk: no clear_leader;
-    // covered by the SetLeaderForTesting-back-to-primary adaptations above.
+    //
+    // Rust's clear_leader pin-to-seed arm — the primary itself refusing, so the leader moves to the
+    // first seed — was waived here as having no .NET analog. It has one now: a watch dial that the
+    // configured primary refuses. Covered in WatchAddressParityAdversarialTests, not by the
+    // SetLeaderForTesting adaptations above, which never reach the reset path.
 }

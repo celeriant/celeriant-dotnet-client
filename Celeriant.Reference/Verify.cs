@@ -70,4 +70,11 @@ public static class Verify
             return SeqOwnership.Unwritten;
         return evt.EventId == eventId ? SeqOwnership.Ours : SeqOwnership.Sibling;
     }
+
+    /// <summary>Exponential backoff with jitter between OCC/timeout retries.</summary>
+    public static async Task Backoff(int attempt, CancellationToken ct = default)
+    {
+        var delayMs = (int)(100 * Math.Pow(2, attempt - 1)) + Random.Shared.Next(0, 50);
+        await Task.Delay(delayMs, ct);
+    }
 }

@@ -42,7 +42,7 @@ public sealed record CatchUpResult(AccountProjection Projection, WriteResult? Hi
 public sealed class AccountService(
     ICeleriantPool pool,
     NpgsqlDataSource db,
-    ILogger<AccountService> logger)
+    ILogger<AccountService> logger) : IAccountService
 {
     private const int MaxRetries = 3;
     private static readonly IEventSerializer Serializer = JsonEventSerializer.Default;
@@ -150,7 +150,7 @@ public sealed class AccountService(
                 if (trackClientSeq && evt.ClientSeq > maxClientSeq)
                     maxClientSeq = evt.ClientSeq;
 
-                newBalance = ReplayEvent(newBalance, evt);
+                newBalance = AccountEvents.ReplayEvent(newBalance, evt);
 
                 if (age < Verify.DedupWindow && evt.EventId is { } eid)
                 {
@@ -244,7 +244,7 @@ public sealed class AccountService(
         {
             if (attempt > 1)
             {
-                await Backoff(attempt, ct);
+                await Verify.Backoff(attempt, ct);
                 (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
                 if (hit is not null)
                     return hit;
@@ -340,7 +340,7 @@ public sealed class AccountService(
         {
             if (attempt > 1)
             {
-                await Backoff(attempt, ct);
+                await Verify.Backoff(attempt, ct);
                 (projection, hit) = await CatchUpAsync(accountId, eventId: eventId, ct: ct);
                 if (hit is not null)
                     return hit;
@@ -420,8 +420,6 @@ public sealed class AccountService(
 
     // ───────────────────────── Write: Transfer ─────────────────────────
 
-    public sealed record TransferResult(WriteResult From, WriteResult To);
-
     public async Task<TransferResult> TransferAsync(
         Guid fromAccountId, Guid toAccountId, int amountCents, Guid eventId, CancellationToken ct = default)
     {
@@ -442,7 +440,7 @@ public sealed class AccountService(
         {
             if (attempt > 1)
             {
-                await Backoff(attempt, ct);
+                await Verify.Backoff(attempt, ct);
                 (fromProjection, fromHit) = await CatchUpAsync(fromAccountId, eventId: eventId, ct: ct);
                 (toProjection, toHit) = await CatchUpAsync(toAccountId, eventId: eventId, ct: ct);
                 if (await ResolveTransferHitsAsync(eventId, fromAccountId, toAccountId, fromHit, toHit, ct) is { } redone)
@@ -610,7 +608,7 @@ public sealed class AccountService(
             await foreach (var batch in pool.ReadAllAsync(key, ReadFilters.From(fromBatchIndex ?? 1), ct))
             {
                 foreach (var evt in batch.Events)
-                    events.Add(FormatEvent(batch, evt));
+                    events.Add(AccountEvents.FormatEvent(batch, evt));
             }
 
             return (events.ToArray(), projection.LastBatchIndex, projection.BalanceCents);
@@ -622,38 +620,6 @@ public sealed class AccountService(
     }
 
     // ───────────────────────── Helpers ─────────────────────────
-
-    private static long ReplayEvent(long balanceCents, AggregateEvent evt)
-    {
-        return evt.EventTypeMajor switch
-        {
-            1 => balanceCents + Serializer.Deserialize<Deposited>(evt.EventValue).AmountCents,
-            2 => balanceCents - Serializer.Deserialize<Withdrawn>(evt.EventValue).AmountCents,
-            3 => balanceCents - Serializer.Deserialize<TransferredOut>(evt.EventValue).AmountCents,
-            4 => balanceCents + Serializer.Deserialize<TransferredIn>(evt.EventValue).AmountCents,
-            _ => balanceCents,
-        };
-    }
-
-    private static object FormatEvent(AggregateEventBatch batch, AggregateEvent evt)
-    {
-        var (typeName, amountCents) = evt.EventTypeMajor switch
-        {
-            1 => ("Deposited", Serializer.Deserialize<Deposited>(evt.EventValue).AmountCents),
-            2 => ("Withdrawn", Serializer.Deserialize<Withdrawn>(evt.EventValue).AmountCents),
-            3 => ("TransferredOut", Serializer.Deserialize<TransferredOut>(evt.EventValue).AmountCents),
-            4 => ("TransferredIn", Serializer.Deserialize<TransferredIn>(evt.EventValue).AmountCents),
-            _ => ("Unknown", 0),
-        };
-
-        return new
-        {
-            batchIndex = batch.AggregateVersion,
-            type = typeName,
-            amountCents,
-            timestamp = batch.ServerTimestamp,
-        };
-    }
 
     /// <summary>
     /// Persist a successful write: response row and projection bump in one
@@ -696,12 +662,6 @@ public sealed class AccountService(
         {
             logger.LogWarning(ex, "Failed to persist write for {AccountId}, will self-heal on next catch-up", accountId);
         }
-    }
-
-    private static async Task Backoff(int attempt, CancellationToken ct)
-    {
-        var delayMs = (int)(100 * Math.Pow(2, attempt - 1)) + Random.Shared.Next(0, 50);
-        await Task.Delay(delayMs, ct);
     }
 }
 

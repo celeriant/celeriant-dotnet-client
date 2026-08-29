@@ -27,8 +27,20 @@ public sealed class WatchOptions
     /// the Identify handshake before sending the watch request.</summary>
     public ClientIdentityConfig? IdentityConfig { get; init; }
 
-    /// <summary>Dial timeout for establishing the watch connection. Null means no timeout:
-    /// a black-holed node then stalls for the OS TCP timeout. <see cref="CeleriantPool"/>
-    /// fills this from its own connection timeout when unset.</summary>
+    /// <summary>
+    /// Per-phase timeout for establishing the watch connection. Connecting is three round trips —
+    /// the dial (plus TLS), the Identify handshake when <see cref="IdentityConfig"/> is set, and
+    /// the watch subscription acknowledgement — and each gets this budget in full, so one node can
+    /// take up to three times this value before the connect gives up and routing moves on.
+    ///
+    /// <para>
+    /// Null means no timeout at all, and for the two round trips after the dial that means no
+    /// bound whatsoever: the socket is established and the peer is merely silent, so there is no
+    /// OS-level TCP timeout waiting to rescue the caller. A node that accepts the connection and
+    /// then says nothing parks <c>ConnectAsync</c> indefinitely. <see cref="CeleriantPool"/> fills
+    /// this from its own connection timeout when unset, so only a direct
+    /// <see cref="WatchConnection.ConnectAsync"/> caller can leave it null.
+    /// </para>
+    /// </summary>
     public TimeSpan? ConnectionTimeout { get; init; }
 }

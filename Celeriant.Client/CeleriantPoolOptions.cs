@@ -26,7 +26,12 @@ public sealed class CeleriantPoolOptions
     /// <summary>Maximum number of pooled connections. Default: 10.</summary>
     public int MaxConnections { get; init; } = 10;
 
-    /// <summary>Timeout for establishing a new TCP connection. Default: 5 seconds.</summary>
+    /// <summary>
+    /// Timeout for establishing a new connection, applied per round trip rather than to the
+    /// establishment as a whole. Default: 5 seconds. A watch connect spends it up to three times
+    /// against one node — dial, Identify, subscribe — so size a failover deadline against
+    /// <c>3 x ConnectionTimeout x candidates</c>, not against this value alone.
+    /// </summary>
     public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Per-request timeout applied to each <c>SendRequestAsync</c> call. Default: 30 seconds.</summary>
@@ -35,7 +40,11 @@ public sealed class CeleriantPoolOptions
     /// <summary>Maximum allowed request payload size in bytes. Default: 10 MB.</summary>
     public long MaxRequestSize { get; init; } = 10_000_000;
 
-    /// <summary>Maximum allowed response payload size in bytes. Default: 64 MB.</summary>
+    /// <summary>Maximum allowed response payload size in bytes. Default: 64 MB. This bounds a single
+    /// wire page, not the whole aggregate; the server chooses the page size, and the client does not
+    /// renegotiate it. Keep this at or above the server's configured response page size — set it lower
+    /// and a read whose first page exceeds it throws <see cref="Errors.ProtocolException"/> with no
+    /// smaller page to fall back to, making large aggregates unreadable through this pool.</summary>
     public long MaxResponseSize { get; init; } = 64 * 1024 * 1024;
 
     /// <summary>

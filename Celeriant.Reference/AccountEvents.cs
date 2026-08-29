@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using Celeriant.Client.Requests;
+using Celeriant.Client.Responses;
+using Celeriant.Client.Serialization;
 
 namespace Celeriant.Reference;
 
@@ -9,6 +11,90 @@ public sealed record Deposited(int AmountCents);
 public sealed record Withdrawn(int AmountCents);
 public sealed record TransferredOut(int AmountCents, Guid ToAccountId);
 public sealed record TransferredIn(int AmountCents, Guid FromAccountId);
+
+/// <summary>
+/// Shared event fold and formatting, used by every projection backend (Postgres
+/// and in-memory) so they replay and render identically. Mirrors Rust's
+/// <c>events.rs</c>.
+/// </summary>
+public static class AccountEvents
+{
+    private static readonly IEventSerializer Serializer = JsonEventSerializer.Default;
+
+    /// <summary>
+    /// Fold one event into the running balance. Unknown event types fold as a
+    /// no-op: the demo favours staying up over halting on schema drift. A
+    /// production fold should fail loudly instead; a silently skipped event is
+    /// a silently wrong balance.
+    /// </summary>
+    public static long ReplayEvent(long balanceCents, AggregateEvent evt)
+    {
+        return evt.EventTypeMajor switch
+        {
+            1 => balanceCents + Serializer.Deserialize<Deposited>(evt.EventValue).AmountCents,
+            2 => balanceCents - Serializer.Deserialize<Withdrawn>(evt.EventValue).AmountCents,
+            3 => balanceCents - Serializer.Deserialize<TransferredOut>(evt.EventValue).AmountCents,
+            4 => balanceCents + Serializer.Deserialize<TransferredIn>(evt.EventValue).AmountCents,
+            _ => balanceCents,
+        };
+    }
+
+    /// <summary>Render one event for the history endpoint.</summary>
+    public static object FormatEvent(AggregateEventBatch batch, AggregateEvent evt)
+    {
+        switch (evt.EventTypeMajor)
+        {
+            case 1:
+                return new
+                {
+                    batchIndex = batch.AggregateVersion,
+                    type = "Deposited",
+                    amountCents = Serializer.Deserialize<Deposited>(evt.EventValue).AmountCents,
+                    timestamp = batch.ServerTimestamp,
+                };
+            case 2:
+                return new
+                {
+                    batchIndex = batch.AggregateVersion,
+                    type = "Withdrawn",
+                    amountCents = Serializer.Deserialize<Withdrawn>(evt.EventValue).AmountCents,
+                    timestamp = batch.ServerTimestamp,
+                };
+            case 3:
+            {
+                var t = Serializer.Deserialize<TransferredOut>(evt.EventValue);
+                return new
+                {
+                    batchIndex = batch.AggregateVersion,
+                    type = "TransferredOut",
+                    amountCents = t.AmountCents,
+                    toAccountId = t.ToAccountId,
+                    timestamp = batch.ServerTimestamp,
+                };
+            }
+            case 4:
+            {
+                var t = Serializer.Deserialize<TransferredIn>(evt.EventValue);
+                return new
+                {
+                    batchIndex = batch.AggregateVersion,
+                    type = "TransferredIn",
+                    amountCents = t.AmountCents,
+                    fromAccountId = t.FromAccountId,
+                    timestamp = batch.ServerTimestamp,
+                };
+            }
+            default:
+                return new
+                {
+                    batchIndex = batch.AggregateVersion,
+                    type = "Unknown",
+                    amountCents = 0,
+                    timestamp = batch.ServerTimestamp,
+                };
+        }
+    }
+}
 
 public static class Constants
 {

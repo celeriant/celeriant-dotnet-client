@@ -16,11 +16,18 @@ namespace Celeriant.Client.Requests;
 [MessagePackObject]
 public record struct ReadFilters
 {
-    /// <summary>Start reading from this event batch index (inclusive). Minimum value is 1;
-    /// values of 0 are treated as 1.</summary>
+    private readonly long _fromAggregateVersion;
+
+    /// <summary>Start reading from this event batch index (inclusive). Minimum value is 1; a value
+    /// below 1 — including the struct default of a <c>new ReadFilters { ... }</c> that never sets it —
+    /// reads as 1, so it is always safe to leave unset.</summary>
     [Key(0)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
-    public long FromAggregateVersion { get; init; }
+    public long FromAggregateVersion
+    {
+        get => _fromAggregateVersion < 1 ? 1 : _fromAggregateVersion;
+        init => _fromAggregateVersion = value;
+    }
 
     /// <summary>Stop reading at this event batch index (inclusive). Null means read to the end.</summary>
     [Key(1)]

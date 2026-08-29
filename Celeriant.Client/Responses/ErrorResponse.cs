@@ -122,7 +122,8 @@ public sealed class ErrorResponse
     private IReadOnlyDictionary<string, JsonElement>? _parsedFields;
 
     [IgnoreMember]
-    public bool IsNotLeader => ErrorCode is WriteNotLeader or TrimNotLeader or DeleteNotLeader;
+    public bool IsNotLeader => ErrorCode is WriteNotLeader or TrimNotLeader or DeleteNotLeader
+                                          or RegisterSchemaCannotAcceptWrites;
 
     [IgnoreMember]
     public bool IsIdentityRequired => ErrorCode == IdentifyRequired;

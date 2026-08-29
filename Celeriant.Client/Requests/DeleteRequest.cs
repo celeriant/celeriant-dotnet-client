@@ -5,7 +5,7 @@ using Celeriant.Client.Protocol;
 namespace Celeriant.Client.Requests;
 
 [MessagePackObject]
-public sealed class DeleteRequest
+public sealed record DeleteRequest
 {
     [Key(0)]
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]

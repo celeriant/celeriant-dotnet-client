@@ -5,7 +5,7 @@ using Celeriant.Client.Protocol;
 namespace Celeriant.Client.Requests;
 
 [MessagePackObject]
-public sealed class TrimStartRequest
+public sealed record TrimStartRequest
 {
     [Key(0)]
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]

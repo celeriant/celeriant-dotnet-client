@@ -31,5 +31,6 @@ public sealed class IdentifyResponse
     /// resolved from the pool's dictionary cache by <see cref="CompressionDictSha256"/>.
     /// </summary>
     [Key(4)]
+    [MessagePackFormatter(typeof(SeqOrBinBytesFormatter))]
     public byte[]? CompressionDictBytes { get; init; }
 }

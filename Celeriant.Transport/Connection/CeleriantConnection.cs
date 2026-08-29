@@ -35,6 +35,18 @@ public sealed class CeleriantConnection : IAsyncDisposable
     private TimeSpan? _timeout;
     private bool _poisoned;
 
+    // Armed around the socket I/O of one request, cleared once its response is fully read. Stays
+    // armed if the awaiting task is abandoned in between — a cancelled CancellationToken runs no
+    // catch block, so nothing else marks the connection. The bytes still reach the socket and the
+    // response still arrives, so the next borrower would read someone else's reply as its own.
+    private bool _streamDirty;
+
+    // Bytes of a frame consumed but not yet completed. Non-zero only when a read was abandoned
+    // part-way through a frame, which is the one case where the stream is left mid-message.
+    // The watch path reads without ever sending, so `_streamDirty` is never armed there and this
+    // is the only thing that can tell a quiet deadline from a truncated one.
+    private int _framePartialBytes;
+
     // Compression dictionary negotiated during Identify; null until then, or when the cluster isn't
     // using ZstdDict. Drives request compression and ZstdDict response decompression.
     private CachedDict? _dict;
@@ -42,8 +54,25 @@ public sealed class CeleriantConnection : IAsyncDisposable
     /// <summary>The compression dictionary negotiated for this connection, if any.</summary>
     public CachedDict? CurrentDict => _dict;
 
-    /// <summary>True once a transport/protocol error has indeterminate-framed this connection.</summary>
-    public bool IsPoisoned => _poisoned;
+    /// <summary>
+    /// True once this connection's framing is indeterminate: a transport/protocol error poisoned
+    /// it, or a request went out whose response was never read (a cancelled caller). A poisoned
+    /// connection must be discarded.
+    /// </summary>
+    public bool IsPoisoned => _poisoned || _streamDirty || _framePartialBytes > 0;
+
+    /// <summary>
+    /// True when a read was abandoned part-way through a frame, leaving the stream mid-message.
+    /// A deadline that expires with nothing on the wire consumes no bytes and is clean, so this
+    /// stays false for an ordinary quiet interval on a watch subscription.
+    /// </summary>
+    public bool IsMidFrame => _framePartialBytes > 0;
+
+    /// <summary>
+    /// Retire this connection because a response arrived bound to a different request. The
+    /// stream is a reply behind, so nothing further on it can be trusted.
+    /// </summary>
+    public void PoisonForCorrelationMismatch() => _poisoned = true;
 
     private CeleriantConnection(
         TcpClient tcpClient, Stream stream, IConnectionCodec codec, ITransportExceptionFactory ex)
@@ -83,7 +112,12 @@ public sealed class CeleriantConnection : IAsyncDisposable
             {
                 await tcpClient.ConnectAsync(host, port, connectCt).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
+            // The caller's token takes precedence when both have fired. Without that guard a
+            // cancellation arriving just after the dial timer surfaces as a connect timeout, which
+            // pool routing reads as failover-class and answers by dialling the next node — work
+            // the caller has already said it does not want.
+            catch (OperationCanceledException)
+                when (timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested)
             {
                 throw ex.ConnectTimeout($"Connection to {address} timed out after {connectionTimeout}.");
             }
@@ -156,6 +190,13 @@ public sealed class CeleriantConnection : IAsyncDisposable
         await _sendLock.WaitAsync(effectiveCt).ConfigureAwait(false);
         try
         {
+            // Same placement and same reason as the async send path: under the lock, dirty can
+            // only mean the previous holder left without clearing it. A handshake on a stream
+            // that already owes a reply would read that reply instead of its own.
+            if (IsPoisoned)
+                throw _ex.ConnectionFailed("Connection is poisoned; discard and reconnect.");
+
+            _streamDirty = true;
             await SendHeaderAndPayloadAsync(header, payload, effectiveCt).ConfigureAwait(false);
             (uint respType, byte[] body) = await ReadFrameCoreAsync(effectiveCt).ConfigureAwait(false);
 
@@ -224,17 +265,28 @@ public sealed class CeleriantConnection : IAsyncDisposable
         long logicalPayloadBytes,
         CancellationToken ct = default)
     {
-        if (_poisoned)
-            throw _ex.ConnectionFailed("Connection is poisoned; discard and reconnect.");
-
         WireHeader header = BuildRequestHeader(requestType, serializedBody, compressible, logicalPayloadBytes, out byte[] body);
 
         using CancellationTokenSource? timeoutCts = BuildTimeoutCts(ct);
         CancellationToken effectiveCt = timeoutCts?.Token ?? ct;
 
+        // Armed after the lock: a cancel that fires while queueing on `_sendLock` wrote
+        // nothing and leaves the connection clean. Once past the lock the flag is
+        // pessimistic — a token cancelling in the window before the first write arms it
+        // with zero bytes out — which costs one discarded connection rather than
+        // crosstalk, so it fails in the safe direction.
         await _sendLock.WaitAsync(effectiveCt).ConfigureAwait(false);
         try
         {
+            // Under the lock, because `IsPoisoned` includes `_streamDirty` and dirty is what a
+            // request in flight looks like. Checked before the lock, a second caller sharing this
+            // client would see a healthy connection mid-exchange as poisoned — and the pool would
+            // discard it. Under the lock, dirty can only mean the previous holder left without
+            // clearing it, which is what this guards.
+            if (IsPoisoned)
+                throw _ex.ConnectionFailed("Connection is poisoned; discard and reconnect.");
+
+            _streamDirty = true;
             await SendHeaderAndPayloadAsync(header, body, effectiveCt).ConfigureAwait(false);
             (uint respType, byte[] respBody) = await ReadFrameCoreAsync(effectiveCt).ConfigureAwait(false);
             return new RawFrame(respType, respBody);
@@ -260,6 +312,12 @@ public sealed class CeleriantConnection : IAsyncDisposable
     /// <summary>
     /// Synchronous send/receive for maximum throughput: no lock, no CTS, no async overhead. The
     /// caller must guarantee single-threaded access to this connection.
+    ///
+    /// <para>
+    /// Unlike the async path, the poison check runs before anything else: this path holds no
+    /// lock, so an exchange another task has in flight is a reason to refuse, not a false
+    /// positive. Refusing costs one connection; proceeding reads someone else's reply.
+    /// </para>
     /// </summary>
     public RawFrame SendRequest(
         uint requestType,
@@ -267,7 +325,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
         bool compressible,
         long logicalPayloadBytes)
     {
-        if (_poisoned)
+        if (IsPoisoned)
             throw _ex.ConnectionFailed("Connection is poisoned; discard and reconnect.");
 
         WireHeader header = BuildRequestHeader(requestType, serializedBody, compressible, logicalPayloadBytes, out byte[] body);
@@ -368,6 +426,16 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
     private async Task<(uint respType, byte[] body)> ReadFrameCoreAsync(CancellationToken ct)
     {
+        // An earlier read was abandoned part-way through a frame, so the next bytes
+        // on this socket are that frame's tail. Reading them as a fresh header
+        // succeeds often enough to be dangerous: it would return the tail as a whole
+        // frame AND clear the counter, reporting the connection healthy while it is
+        // still offset. Refuse instead — the same closed-failure the Rust watch reader
+        // takes.
+        if (_framePartialBytes > 0)
+            throw Poison(_ex.Protocol(
+                $"Connection is {_framePartialBytes} bytes into an abandoned frame; discard and reconnect."));
+
         byte[] headerBuf = ArrayPool<byte>.Shared.Rent(WireHeader.Size);
         WireHeader responseHeader;
         try
@@ -388,6 +456,13 @@ public sealed class CeleriantConnection : IAsyncDisposable
         byte[] responsePayload = new byte[respLen];
         await ReadExactIntoAsync(responsePayload, respLen, ct).ConfigureAwait(false);
 
+        // The frame is off the socket here, so the stream is back on a message
+        // boundary. Decompression is pure and cannot desynchronise anything —
+        // clearing after it would retire a connection that is perfectly usable
+        // whenever a body fails to unwrap.
+        _streamDirty = false;
+        _framePartialBytes = 0;
+
         return (responseHeader.MessageType, Decompress(responseHeader, responsePayload));
     }
 
@@ -402,6 +477,12 @@ public sealed class CeleriantConnection : IAsyncDisposable
         try
         {
             ReadExactSync(responsePayload.AsSpan(0, respLen));
+
+            // Frame is off the socket; same boundary as the async path, and ahead of
+            // Decompress for the same reason: a body that fails to unwrap leaves the
+            // stream on a message boundary, not mid-message.
+            _framePartialBytes = 0;
+
             // Decompress needs an exact-length buffer; copy out of the pooled rental.
             byte[] exact = responsePayload.AsSpan(0, respLen).ToArray();
             return new RawFrame(responseHeader.MessageType, Decompress(responseHeader, exact));
@@ -448,6 +529,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
             if (read == 0)
                 throw new EndOfStreamException($"Connection closed while reading (expected {count} bytes, got {totalRead}).");
             totalRead += read;
+            _framePartialBytes += read;
         }
     }
 
@@ -461,6 +543,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
             if (read == 0)
                 throw new EndOfStreamException($"Connection closed while reading (expected {count} bytes, got {totalRead}).");
             totalRead += read;
+            _framePartialBytes += read;
         }
     }
 

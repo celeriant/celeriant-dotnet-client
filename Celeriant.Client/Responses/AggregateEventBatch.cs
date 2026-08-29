@@ -13,6 +13,8 @@ namespace Celeriant.Client.Responses;
 [MessagePackObject]
 public sealed class AggregateEventBatch
 {
+    /// <summary>This batch's version — the "aggregate version" (a.k.a. batch index): the value to pass
+    /// as a read cursor to resume, and the same number <c>expectedVersion</c> guards against.</summary>
     [Key(0)]
     [MessagePackFormatter(typeof(UInt64AsInt64Formatter))]
     public long AggregateVersion { get; init; }
@@ -27,10 +29,12 @@ public sealed class AggregateEventBatch
     [MessagePackFormatter(typeof(CeleriantNullableGuidFormatter))]
     public Guid? UserId { get; init; }
 
+    /// <summary>Server-assigned time the batch was committed.</summary>
     [Key(3)]
     [MessagePackFormatter(typeof(EpochMillisFormatter))]
     public DateTimeOffset ServerTimestamp { get; init; }
 
+    /// <summary>The events in this batch, in order.</summary>
     [Key(4)]
     public AggregateEvent[] Events { get; init; } = [];
 }

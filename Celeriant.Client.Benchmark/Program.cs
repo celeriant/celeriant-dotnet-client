@@ -93,8 +93,10 @@ try
 
     // --- Throughput ---
     Console.WriteLine($"\n--- Throughput ({ThroughputConnections} connections) ---");
+    var thruBefore = GcNow();
     var thruResult = await RunBenchmarkIteration(address, ThroughputConnections, identityConfig, useAsync: true);
     PrintResult(thruResult);
+    PrintAllocDelta(thruBefore, thruResult.TotalRequests);
     var thruFailures = CheckThresholds(thruResult,
         minThroughput: StandaloneThroughputMin, maxAvgLatencyMs: null, maxP99LatencyMs: null);
 
@@ -102,8 +104,10 @@ try
 
     // --- Latency ---
     Console.WriteLine($"\n--- Latency ({LatencyConnections} connections) ---");
+    var latBefore = GcNow();
     var latResult = await RunBenchmarkIteration(address, LatencyConnections, identityConfig, useAsync: false);
     PrintResult(latResult);
+    PrintAllocDelta(latBefore, latResult.TotalRequests);
     var latFailures = CheckThresholds(latResult,
         minThroughput: null, maxAvgLatencyMs: StandaloneLatencyAvgMaxMs, maxP99LatencyMs: StandaloneLatencyP99MaxMs);
 
@@ -181,20 +185,58 @@ string? FindInPath(string executable)
     return null;
 }
 
+// Mirrors the argument list the Rust harness builds for batch_standalone_cleartext
+// (celeriant_integration_tests ServerConfig::default() plus its bench_tuning overrides), so a
+// C#-vs-Rust comparison measures the two CLIENTS against one server configuration rather than
+// two differently-tuned servers. Left on its own defaults, at 24k connections the server runs a
+// mesh channel far smaller than 8192 and sheds load with ServerBusy, which reads as a client
+// throughput collapse and is not one.
+//
+// num_shards follows the same rule as Rust's bench_tuning: (cpus * 2 / 3) clamped to [4, 24].
 List<string> BuildServerArgs(string dataRoot, ushort port)
 {
+    int numShards = Math.Clamp(Environment.ProcessorCount * 2 / 3, 4, 24);
+    long fsyncDelayUs = 17_000;
+
     return
     [
         "--data-root", dataRoot,
         "--listen-address", "0.0.0.0",
         "--client-port", port.ToString(),
         "--replication-port", (port + 1).ToString(),
-        "--standalone",
+        "--num-shards", numShards.ToString(),
+        "--routing-rule", "aggregate_id",
+        "--mesh-channel-size", "8192",
+        "--max-open-files", "1000",
+        "--read-max-chunk-size", "32768",
+        "--write-max-chunk-size", "32768",
+        "--max-request-size", "16777216",
+        "--internode-max-request-size", "67108864",
+        "--max-response-size", "67108864",
+        "--max-requested-latency-ms", "2000",
+        "--client-connection-timeout-ms", "30000",
+        "--shard-log-preallocate-bytes", "1073741824",
+        "--fsync-delay-us", fsyncDelayUs.ToString(),
         "--log-level", "warn",
+        "--list-max-duration-ms", "2000",
+        "--list-page-size", "2000",
+        "--max-schema-size-bytes", "16384",
+        "--memory-consumption-percent", "80",
+        "--standalone",
+        "--internode-connection-timeout-ms", "1000",
+        "--internode-request-timeout-ms", "2000",
+        "--replication-delay-us", "17000",
+        "--heartbeat-interval-ms", "500",
+        "--heartbeat-lease-duration-ms", "1500",
+        "--s3-lease-duration-ms", "30000",
+        "--max-clock-drift-ms", "500",
+        "--tls-mode", "disabled",
+        "--tls-client-auth", "require",
         "--require-client-identity",
         "--insecure-allow-plaintext-auth",
-        "--tls-mode", "disabled",
-        "--tls-client-auth", "none",
+        "--compaction-check-interval-secs", "7200",
+        "--compaction-min-reclaimable-ratio", "0.2",
+        "--metrics-port", (port + 2).ToString(),
     ];
 }
 
@@ -445,15 +487,46 @@ async Task<BenchmarkResult> RunBenchmarkIteration(string addr, int numConnection
     if (allLatencies.Count > 0)
     {
         avgMs = allLatencies.Average();
-        p50 = allLatencies[allLatencies.Count * 50 / 100];
-        p95 = allLatencies[allLatencies.Count * 95 / 100];
-        p99 = allLatencies[allLatencies.Count * 99 / 100];
-        p999 = allLatencies[allLatencies.Count * 999 / 1000];
+        p50 = Percentile(allLatencies, 50, 100);
+        p95 = Percentile(allLatencies, 95, 100);
+        p99 = Percentile(allLatencies, 99, 100);
+        p999 = Percentile(allLatencies, 999, 1000);
         min = allLatencies[0];
         max = allLatencies[^1];
     }
 
     return new BenchmarkResult(actualConnections, totalRequests, throughput, avgMs, p50, p95, p99, p999, min, max);
+}
+
+/// <summary>Managed allocation and collection counters, sampled at a scenario boundary.</summary>
+(long Allocated, int Gen0, int Gen1, int Gen2) GcNow() => (
+    GC.GetTotalAllocatedBytes(precise: false),
+    GC.CollectionCount(0),
+    GC.CollectionCount(1),
+    GC.CollectionCount(2));
+
+/// <summary>
+/// Report what a scenario allocated. Bytes per request is the number worth reading: it separates
+/// "the client is doing more work" from "the client is making more garbage", and the two want
+/// different fixes.
+/// </summary>
+void PrintAllocDelta((long Allocated, int Gen0, int Gen1, int Gen2) before, long requests)
+{
+    var now = GcNow();
+    long bytes = now.Allocated - before.Allocated;
+    Console.WriteLine(
+        $"  Alloc: {bytes / (1024.0 * 1024.0):F0} MiB total, {(requests > 0 ? bytes / (double)requests : 0):F0} B/req"
+        + $" | GC gen0 {now.Gen0 - before.Gen0}, gen1 {now.Gen1 - before.Gen1}, gen2 {now.Gen2 - before.Gen2}");
+}
+
+// long arithmetic, because `count * numerator` in int32 overflows for P99.9 past ~2.15M samples,
+// wrapping to a positive index near the 29th percentile — P99.9 would silently print LOWER than
+// P99 on exactly the big runs it matters for. The clamp keeps the top percentile of a short run
+// from indexing past the end.
+long Percentile(List<long> sorted, long numerator, long denominator)
+{
+    long index = (long)sorted.Count * numerator / denominator;
+    return sorted[(int)Math.Clamp(index, 0, sorted.Count - 1)];
 }
 
 void PrintResult(BenchmarkResult r)

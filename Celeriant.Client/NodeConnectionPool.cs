@@ -41,13 +41,28 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
             {
                 return await conn.Client.SendRequestAsync(request, ct).ConfigureAwait(false);
             }
-            catch (CeleriantClientException)
+            catch (CeleriantClientException ex) when (LeavesConnectionDirty(ex))
             {
                 conn.MarkBroken();
                 throw;
             }
         }
     }
+
+    /// <summary>
+    /// Whether an error leaves the stream desynchronised, so the connection cannot be reused.
+    ///
+    /// <para>
+    /// A server-decoded error — <c>WriteOccException</c> in an OCC retry loop, <c>NotLeader</c>,
+    /// <c>ServerBusy</c>, <c>IdentityRequired</c> — arrives as a fully decoded response frame: the
+    /// exchange completed and the stream is clean, so retiring on it would discard and re-dial a
+    /// healthy connection per attempt. The classes below are the ones the transport raises when
+    /// the exchange did NOT complete — connection, timeout, and protocol (where a correlation
+    /// mismatch surfaces) — matching <c>leaves_connection_dirty</c> in the Rust client.
+    /// </para>
+    /// </summary>
+    private static bool LeavesConnectionDirty(CeleriantClientException error)
+        => error is ConnectionFailedException or CeleriantTimeoutException or ProtocolException;
 
     public ValueTask DisposeAsync() => _inner.DisposeAsync();
 

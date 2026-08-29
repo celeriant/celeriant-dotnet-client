@@ -36,6 +36,18 @@ public static class CeleriantCrypto
     {
         byte[] publicKeyDer = Convert.FromBase64String(publicKeyBase64);
         byte[] hash = SHA256.HashData(publicKeyDer);
-        return new Guid(hash.AsSpan(0, 16));
+
+        // The server reads SHA-256(DER)[0..16] as a little-endian u128 and enforces that identity on
+        // every write; the value must therefore match the Guid that Identify hands back. Two steps get
+        // there, verified against a live identity-enforcing server: reverse all 16 bytes (little-endian
+        // u128), then reorder the first three Guid groups (mixed-endian Guid layout). A plain
+        // `new Guid(bytes)` skips both and yields an id the server rejects on every write.
+        byte[] b = hash[..16];
+        Array.Reverse(b);
+        (b[0], b[3]) = (b[3], b[0]);
+        (b[1], b[2]) = (b[2], b[1]);
+        (b[4], b[5]) = (b[5], b[4]);
+        (b[6], b[7]) = (b[7], b[6]);
+        return new Guid(b);
     }
 }

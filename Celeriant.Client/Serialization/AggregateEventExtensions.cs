@@ -15,7 +15,12 @@ public static class AggregateEventExtensions
     /// <param name="eventTypeMajor">Major event type identifier (maps to a registered schema).</param>
     /// <param name="payload">The event payload object to serialize.</param>
     /// <param name="serializer">Serializer to encode the payload to bytes.</param>
-    /// <param name="clientSeq">Client-assigned index within the batch (starting at 1).</param>
+    /// <param name="clientSeq">Client-assigned index within the batch. <b>Defaults to 1</b>, so if you
+    /// build several events for one write with repeated <c>Create</c> calls you must pass a distinct,
+    /// increasing value to each (1, 2, 3, …): left at the default they all share seq 1. The server does
+    /// not dedupe duplicate seqs within one write, so a collision silently corrupts per-seq idempotency
+    /// tracking; the client rejects it with <c>ArgumentException</c> when <c>EnforceClientIdempotency</c>
+    /// is set. A single-event write can keep the default.</param>
     /// <param name="eventTypeMinor">Minor event type identifier. Defaults to 0.</param>
     /// <param name="eventId">Optional client-assigned event ID for deduplication.</param>
     /// <param name="timestamp">Event timestamp. Defaults to <see cref="DateTimeOffset.UtcNow"/>.</param>

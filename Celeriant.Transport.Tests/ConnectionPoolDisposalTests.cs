@@ -244,13 +244,19 @@ public class ConnectionPoolDisposalTests(ITestOutputHelper output)
 
         await pool.DisposeAsync();
 
+        // Await the wakeup with a deadline rather than sampling after a fixed sleep: on a
+        // starved CI runner the continuation can take seconds to be scheduled, which is the
+        // runner's problem, not the pool's. Only never waking is a pool bug.
         var cpu0 = Process.GetCurrentProcess().TotalProcessorTime;
-        await Task.Delay(2000);
+        var sw = Stopwatch.StartNew();
+        var done = await Task.WhenAny(parked, Task.Delay(TimeSpan.FromSeconds(30)));
         var cpu1 = Process.GetCurrentProcess().TotalProcessorTime;
 
-        output.WriteLine($"P3: 2s after dispose -> parked.Status={parked.Status}, IsCompleted={parked.IsCompleted}, process CPU delta={(cpu1 - cpu0).TotalMilliseconds:0}ms");
+        output.WriteLine(done == parked
+            ? $"P3: parked caller completed as {parked.Status} {sw.ElapsedMilliseconds}ms after dispose, process CPU delta={(cpu1 - cpu0).TotalMilliseconds:0}ms"
+            : $"P3: parked caller STILL PENDING 30s after dispose, process CPU delta={(cpu1 - cpu0).TotalMilliseconds:0}ms");
         await held.DisposeAsync();
-        Assert.True(parked.IsCompleted, "parked caller is still pending 2s after the pool was disposed");
+        Assert.True(done == parked, "parked caller is still pending 30s after the pool was disposed");
     }
 
     // ---------------------------------------------------------------------

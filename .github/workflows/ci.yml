@@ -96,7 +96,20 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Order matters. Celeriant.Client declares a dependency on Celeriant.Transport
+      # at the same version, so Transport has to be accepted first: a glob pushes
+      # Client first (alphabetical) and leaves a window where the newest Client is
+      # listed against a Transport that does not exist yet and cannot be restored.
       - name: Publish to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: https://api.nuget.org/v3/index.json
         run: |
-          dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push ./artifacts/*.snupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          set -euo pipefail
+          push() {
+            dotnet nuget push "$1" --api-key "$NUGET_API_KEY" --source "$NUGET_SOURCE" --skip-duplicate
+          }
+          push './artifacts/Celeriant.Transport.*.nupkg'
+          push './artifacts/Celeriant.Client.*.nupkg'
+          push './artifacts/Celeriant.Transport.*.snupkg'
+          push './artifacts/Celeriant.Client.*.snupkg'

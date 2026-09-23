@@ -202,10 +202,10 @@ public class AdvRevRoutingTests
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // Amendment 2: the execution loop (not just the address list) must reach
-    // the tail leader, and exhaustion must not mask the leader's real error.
-    // Pins the divergence from Rust read_route!, which turns a busy leader at
-    // list exhaustion into ConnectionFailed("all nodes unreachable").
+    // The execution loop (not just the address list) must reach the tail
+    // leader, and exhaustion must not mask the leader's real error. Pins the
+    // divergence from Rust read_route!, which turns a busy leader at list
+    // exhaustion into ConnectionFailed("all nodes unreachable").
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -257,7 +257,7 @@ public class AdvRevRoutingTests
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         field.SetValue(pool, int.MaxValue);
 
-        // Amendment 2 (leader-last): list is followers then the leader at the tail.
+        // Leader-last: the list is the followers, then the leader at the tail.
         var followers = new[] { "b:1", "c:1", "d:1" };
         for (int i = 0; i < 6; i++)
         {

@@ -185,6 +185,7 @@ public sealed class ClusterTests
     [SkippableFact]
     public async Task ConcurrentWrites_BothNodesInPool_AllSucceed()
     {
+        SkipIfUnavailable();
         await using var pool = CreatePool(
             address: _fixture.Node1Address,
             seeds: [_fixture.Node2Address]);

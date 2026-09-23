@@ -270,7 +270,7 @@ public class CeleriantPoolTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task WriteAsync_NotLeaderNoAddressNoUntried_ThrowsNotLeader()
+    public async Task WriteAsync_NotLeaderNoAddressNoUntried_ThrowsWalkExhaustedNamingTheNode()
     {
         var error = new ErrorResponse { ErrorCode = ErrorResponse.WriteNotLeader };
         var notLeaderEx = new NotLeaderException(error, leaderAddress: null);
@@ -286,8 +286,12 @@ public class CeleriantPoolTests
         };
 
         await using var pool = CreatePool(MakeOptions(), mocks);
-        await Assert.ThrowsAsync<NotLeaderException>(
+        // The exhausted walk names the node it gave up on and what that node produced, and keeps
+        // the NotLeader answer as the inner exception.
+        var ex = await Assert.ThrowsAsync<ConnectionFailedException>(
             () => pool.WriteAsync(MakeWriteRequest()));
+        Assert.Contains("leader:10000", ex.Message);
+        Assert.IsType<NotLeaderException>(ex.InnerException);
     }
 
     // -----------------------------------------------------------------------

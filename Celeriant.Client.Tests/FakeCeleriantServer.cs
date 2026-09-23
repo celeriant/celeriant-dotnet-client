@@ -39,8 +39,16 @@ internal sealed class FakeCeleriantServer : IAsyncDisposable
     /// server side, that a connection the client opened was actually released.
     /// </param>
     public static FakeCeleriantServer Start(RequestHandler handler, Action<int>? onSessionEnded = null)
+        => Start(handler, 0, onSessionEnded);
+
+    /// <param name="port">
+    /// The loopback port to bind, or 0 for any free one. A fixed port is how a test brings a node
+    /// back up at an address the client has already cached, after that same address spent a while
+    /// refusing connections.
+    /// </param>
+    public static FakeCeleriantServer Start(RequestHandler handler, int port, Action<int>? onSessionEnded = null)
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         return new FakeCeleriantServer(listener, handler, onSessionEnded);
     }

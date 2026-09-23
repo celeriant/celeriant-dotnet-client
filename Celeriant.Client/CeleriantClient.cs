@@ -42,6 +42,13 @@ public sealed class CeleriantClient : ICeleriantClient
     /// </summary>
     public bool IsMidFrame => _conn.IsMidFrame;
 
+    /// <summary>
+    /// True when this idle connection must not be handed out again: the peer closed it, or left
+    /// bytes on it. A non-blocking peek the pool runs before reusing an idle connection.
+    /// See <see cref="Celeriant.Transport.CeleriantConnection.IsUnfitForReuse"/>.
+    /// </summary>
+    public bool IsUnfitForReuse => _conn.IsUnfitForReuse;
+
     // -------------------------------------------------------------------------
     // Static factory methods
     // -------------------------------------------------------------------------
@@ -469,7 +476,7 @@ public sealed class CeleriantClient : ICeleriantClient
     /// Logical payload size used for the compression threshold decision: the event values for a
     /// write, or the schema text for a schema registration.
     /// </summary>
-    private static long PayloadBytes(ClientRequest request) => request switch
+    internal static long PayloadBytes(ClientRequest request) => request switch
     {
         ClientRequest.Write w => w.Value.Writes.Values
             .SelectMany(static sw => sw.Events)

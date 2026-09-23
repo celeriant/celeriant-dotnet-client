@@ -27,6 +27,17 @@ public static class ListExtensions
     private const uint ShardRoutingError1 = ErrorResponse.ShardRoutingMultipleShards;
     private const uint ShardRoutingError2 = ErrorResponse.ShardRoutingIncompatibleFilters;
 
+    internal static ListOptions ResolveOptions(ListOptions? options)
+    {
+        ListOptions resolved = options ?? new ListOptions();
+        if (resolved.StartShard < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(ListOptions.StartShard),
+                resolved.StartShard,
+                "StartShard names a shard id and cannot be negative.");
+        return resolved;
+    }
+
     // -------------------------------------------------------------------------
     // ListOrgsAsync
     // -------------------------------------------------------------------------
@@ -38,7 +49,7 @@ public static class ListExtensions
         this CeleriantClient client,
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListOrgsAsyncCore(client, options ?? new ListOptions(), ct);
+        => ListOrgsAsyncCore(client, ResolveOptions(options), ct);
 
     private static async IAsyncEnumerable<OrgListItem> ListOrgsAsyncCore(
         CeleriantClient client,
@@ -132,7 +143,7 @@ public static class ListExtensions
         Guid? orgId = null,
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListAggregateTypesAsyncCore(client, orgId, options ?? new ListOptions(), ct);
+        => ListAggregateTypesAsyncCore(client, orgId, ResolveOptions(options), ct);
 
     private static async IAsyncEnumerable<AggregateTypeListItem> ListAggregateTypesAsyncCore(
         CeleriantClient client,
@@ -226,7 +237,7 @@ public static class ListExtensions
         Guid? aggregateTypeId = null,
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListAggregatesAsyncCore(client, orgId, aggregateTypeId, options ?? new ListOptions(), ct);
+        => ListAggregatesAsyncCore(client, orgId, aggregateTypeId, ResolveOptions(options), ct);
 
     private static async IAsyncEnumerable<AggregateStats> ListAggregatesAsyncCore(
         CeleriantClient client,

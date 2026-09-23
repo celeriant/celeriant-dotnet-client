@@ -86,6 +86,32 @@ public class FormatterTests
         Assert.Equal(0x08, payload[7]);
     }
 
+    /// <summary>
+    /// A Rust u128 arrives as exactly bin8 c4 10. A short or long bin, or a same-length str, must
+    /// fail deserialization instead of being padded or misread into a plausible Guid.
+    /// </summary>
+    [Theory]
+    [InlineData("bin8 of 8 bytes")]
+    [InlineData("bin8 of 24 bytes")]
+    [InlineData("str of 16 chars")]
+    public void GuidFormatter_DeserializeNon16ByteBin_Throws(string shape)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new MessagePackWriter(buffer);
+        switch (shape)
+        {
+            case "bin8 of 8 bytes": writer.Write(new byte[8]); break;
+            case "bin8 of 24 bytes": writer.Write(new byte[24]); break;
+            case "str of 16 chars": writer.Write(new string('A', 16)); break;
+            default: throw new ArgumentException($"unknown shape {shape}");
+        }
+        writer.Flush();
+        var bytes = buffer.WrittenSpan.ToArray();
+
+        Assert.Throws<MessagePackSerializationException>(() =>
+            DeserializeWith(CeleriantGuidFormatter.Instance, bytes));
+    }
+
     // -----------------------------------------------------------------------
     // NullableGuidFormatter
     // -----------------------------------------------------------------------

@@ -150,8 +150,8 @@ public class OracleRoutingTests
     [Fact]
     public async Task OracleOptinLeaderPresentButLast()
     {
-        // Amendment 2: the leader is no longer excluded: it is the last-resort
-        // candidate. Every follower appears exactly once before it.
+        // The leader is the last-resort candidate, not excluded. Every follower
+        // appears exactly once before it.
         await using var pool = CreatePool(
             MakeOptions("p:1", seeds: ["b:1", "c:1"], routeReadsToFollowers: true));
         pool.SetLeaderForTesting("p:1");
@@ -206,8 +206,8 @@ public class OracleRoutingTests
     [Fact]
     public async Task OracleOptinWatchNeverLeaderAndRotates()
     {
-        // Still holds under Amendment 2: watch takes the FIRST candidate, and the
-        // leader sits last, so it never leads while a follower exists.
+        // Watch takes the first candidate, and the leader sits last, so it never
+        // leads while a follower exists.
         await using var pool = CreatePool(
             MakeOptions("p:1", seeds: ["b:1", "c:1"], routeReadsToFollowers: true));
         pool.SetLeaderForTesting("p:1");
@@ -237,8 +237,8 @@ public class OracleRoutingTests
     [Fact]
     public async Task OracleOptinSingleNodeYieldsLeaderOnly()
     {
-        // Amendment 2: no special case anymore: the general rule (rotated
-        // followers, then leader last) with zero followers yields exactly [leader].
+        // No special case: the general rule (rotated followers, then leader last)
+        // with zero followers yields exactly [leader].
         await using var pool = CreatePool(MakeOptions("p:1", routeReadsToFollowers: true));
         pool.SetLeaderForTesting("p:1");
 

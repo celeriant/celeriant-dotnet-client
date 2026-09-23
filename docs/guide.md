@@ -45,6 +45,12 @@ A single connection is fine for simple use cases, scripts, or admin tools. The c
 For production workloads, `CeleriantPool` is what you want. It manages a set of connections and routes operations to the right node:
 
 - **Writes** always go to the leader. If the leader steps down gracefully, the pool detects the redirect and reroutes automatically with no error. If the leader *crashes*, leader operations throw a transient `ConnectionFailedException` during the few-second election window until a new leader is elected — retry with backoff. (The pool does not retry across the election window itself, since only you know whether re-issuing a possibly-landed write is safe.)
+
+  Two sibling exceptions tell you how safe a retry is, and they are the ones to branch on:
+
+  - `PoolUnavailableException`: this client's own pool refused before dialling anything: the node's circuit breaker is open after a recent failed connect, or the pool was disposed. Nothing left your process, so **retrying is always safe**, and it is not evidence that the node is down. It carries `Address` and `Reason`.
+  - `ConnectionFailedException` / `ConnectionTimeoutException`: the request never reached a node. Safe to retry; the pool has already tried the other nodes it knows about.
+  - `RequestOutcomeUnknownException`: the request was fully written and no answer came back. The node may or may not have applied it, so the pool **never** sends it to another node, and **you must not blindly retry it**. Either make the write idempotent (a stable `clientId` plus `enforceClientIdempotency`, or `expectedVersion`) and retry, or read the aggregate back and decide.
 - **Reads** also go to the leader by default. This gives you read-your-writes: a read issued after a successful write sees that write.
 - **Follower reads** are explicit. Set `RouteReadsToFollowers = true` to send reads to followers and keep the leader free for writes. Follower reads are eventually consistent: a lagging follower returns whatever it has, including "aggregate does not exist" for an aggregate you just wrote. Only opt in if your read path tolerates stale data. If every follower is unreachable, reads and watches fall back to the leader rather than failing: a follower outage costs leader load, not availability.
 

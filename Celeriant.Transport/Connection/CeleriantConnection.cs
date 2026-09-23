@@ -62,6 +62,35 @@ public sealed class CeleriantConnection : IAsyncDisposable
     public bool IsPoisoned => _poisoned || _streamDirty || _framePartialBytes > 0;
 
     /// <summary>
+    /// True when this idle connection must not be handed out again. One non-blocking poll, for a
+    /// pool deciding whether to reuse an idle connection; not worth paying on a socket just
+    /// connected.
+    ///
+    /// <para>
+    /// Between exchanges the peer owes nothing, so any readable state is unfit. Zero bytes readable
+    /// is end-of-stream: a write into that socket still succeeds into the send buffer, so the
+    /// failure would land past the send boundary and be reported as an unknown outcome for a
+    /// request no node ever read. Bytes pending is either the TLS close_notify of a peer that closed
+    /// gracefully, or unsolicited data that would be read as the next response.
+    /// </para>
+    /// </summary>
+    public bool IsUnfitForReuse
+    {
+        get
+        {
+            try
+            {
+                var socket = _tcpClient.Client;
+                return socket is null || socket.Poll(0, SelectMode.SelectRead);
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
     /// True when a read was abandoned part-way through a frame, leaving the stream mid-message.
     /// A deadline that expires with nothing on the wire consumes no bytes and is clean, so this
     /// stays false for an ordinary quiet interval on a watch subscription.
@@ -134,7 +163,10 @@ public sealed class CeleriantConnection : IAsyncDisposable
                 {
                     await sslStream.AuthenticateAsClientAsync(sslOptions, connectCt).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
+                // Same precedence as the TCP dial above: a caller cancelling during the handshake
+                // is not a node that timed out, and must not be answered by dialling the next one.
+                catch (OperationCanceledException)
+                    when (timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested)
                 {
                     await sslStream.DisposeAsync().ConfigureAwait(false);
                     throw ex.ConnectTimeout($"TLS handshake with {address} timed out after {connectionTimeout}.");
@@ -219,20 +251,28 @@ public sealed class CeleriantConnection : IAsyncDisposable
             }
 
             // sha + bytes  → server shipped a new/refreshed dictionary; store it.
-            // sha only     → server confirmed our advertised sha; resolve bytes from the pool cache.
+            // sha only     → server confirmed our advertised sha; resolve bytes from the pool
+            //                cache. A cache miss is fatal here: proceeding with no dictionary
+            //                fails on the first ZstdDict response instead of at the handshake,
+            //                where the caller can still reconnect without the advertised sha.
             // no sha       → cluster is not using ZstdDict; no dictionary.
             _dict = (result.DictSha, result.DictBytes) switch
             {
                 (string sha, byte[] bytes) => new CachedDict(sha, bytes),
-                (string sha, null) => dictLookup?.Invoke(sha) is { } cached ? new CachedDict(sha, cached) : null,
+                (string sha, null) => dictLookup?.Invoke(sha) is { } cached
+                    ? new CachedDict(sha, cached)
+                    : throw Poison(_ex.Protocol(
+                        $"Server confirmed dictionary sha '{sha}' but no matching dictionary is cached.")),
                 (null, _) => null,
             };
 
             return result.ClientId;
         }
+        // Identify is part of establishing the connection, so its deadline is connect-class: no
+        // request is in doubt.
         catch (OperationCanceledException) when (IsTimeoutCancellation(timeoutCts, ct))
         {
-            throw Poison(_ex.Timeout("IdentifyAsync timed out."));
+            throw Poison(_ex.ConnectTimeout("IdentifyAsync timed out."));
         }
         catch (EndOfStreamException inner)
         {
@@ -270,6 +310,12 @@ public sealed class CeleriantConnection : IAsyncDisposable
         using CancellationTokenSource? timeoutCts = BuildTimeoutCts(ct);
         CancellationToken effectiveCt = timeoutCts?.Token ?? ct;
 
+        // The send/receive boundary. Until the whole frame is on the socket a failure means the
+        // node never saw the request and another node can serve it; past it the node may have
+        // applied the request, so the outcome is unknown and it must never be re-sent. A partial
+        // write is pre-send: the server cannot decode an incomplete frame.
+        bool written = false;
+
         // Armed after the lock: a cancel that fires while queueing on `_sendLock` wrote
         // nothing and leaves the connection clean. Once past the lock the flag is
         // pessimistic — a token cancelling in the window before the first write arms it
@@ -288,20 +334,27 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
             _streamDirty = true;
             await SendHeaderAndPayloadAsync(header, body, effectiveCt).ConfigureAwait(false);
+            written = true;
             (uint respType, byte[] respBody) = await ReadFrameCoreAsync(effectiveCt).ConfigureAwait(false);
             return new RawFrame(respType, respBody);
         }
         catch (OperationCanceledException) when (IsTimeoutCancellation(timeoutCts, ct))
         {
-            throw Poison(_ex.Timeout("Request timed out."));
+            throw Poison(written
+                ? _ex.RequestOutcomeUnknown("Timed out waiting for the response; the request was already sent.")
+                : _ex.Timeout("Request timed out."));
         }
         catch (EndOfStreamException inner)
         {
-            throw Poison(_ex.ConnectionFailed("Connection closed during request.", inner));
+            throw Poison(written
+                ? _ex.RequestOutcomeUnknown("Connection closed after the request was sent; outcome unknown.", inner)
+                : _ex.ConnectionFailed("Connection closed during request.", inner));
         }
         catch (IOException inner)
         {
-            throw Poison(_ex.ConnectionFailed("IO error during request.", inner));
+            throw Poison(written
+                ? _ex.RequestOutcomeUnknown("IO error after the request was sent; outcome unknown.", inner)
+                : _ex.ConnectionFailed("IO error during request.", inner));
         }
         finally
         {
@@ -330,6 +383,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
         WireHeader header = BuildRequestHeader(requestType, serializedBody, compressible, logicalPayloadBytes, out byte[] body);
 
+        bool written = false;
         try
         {
             int totalLen = WireHeader.Size + body.Length;
@@ -339,6 +393,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
                 header.WriteTo(combined);
                 Buffer.BlockCopy(body, 0, combined, WireHeader.Size, body.Length);
                 _stream.Write(combined, 0, totalLen);
+                written = true;
             }
             finally
             {
@@ -352,11 +407,15 @@ public sealed class CeleriantConnection : IAsyncDisposable
         }
         catch (EndOfStreamException inner)
         {
-            throw Poison(_ex.ConnectionFailed("Connection closed during request.", inner));
+            throw Poison(written
+                ? _ex.RequestOutcomeUnknown("Connection closed after the request was sent; outcome unknown.", inner)
+                : _ex.ConnectionFailed("Connection closed during request.", inner));
         }
         catch (IOException inner)
         {
-            throw Poison(_ex.ConnectionFailed("IO error during request.", inner));
+            throw Poison(written
+                ? _ex.RequestOutcomeUnknown("IO error after the request was sent; outcome unknown.", inner)
+                : _ex.ConnectionFailed("IO error during request.", inner));
         }
     }
 
@@ -389,7 +448,10 @@ public sealed class CeleriantConnection : IAsyncDisposable
     {
         await _stream.DisposeAsync().ConfigureAwait(false);
         _tcpClient.Dispose();
-        _sendLock.Dispose();
+
+        // _sendLock is not disposed: an in-flight request still holds it and releases it in its
+        // finally, and SemaphoreSlim.Dispose never wakes a queued waiter. It owns no OS handle
+        // unless AvailableWaitHandle is touched, which never happens here.
     }
 
     // -------------------------------------------------------------------------
@@ -407,6 +469,10 @@ public sealed class CeleriantConnection : IAsyncDisposable
         CompressionType compression = CompressionType.None;
         body = serialized;
         uint uncompressedLength = (uint)serialized.Length;
+
+        if (uncompressedLength > _maxRequestSize)
+            throw new ArgumentException(
+                $"Request payload ({uncompressedLength} bytes) exceeds MaxRequestSize ({_maxRequestSize} bytes).");
 
         if (_dict is { } dict && compressible && logicalPayloadBytes >= _compressionThreshold)
         {
@@ -448,9 +514,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
             ArrayPool<byte>.Shared.Return(headerBuf);
         }
 
-        if (responseHeader.CompressedLength > _maxResponseSize)
-            throw Poison(_ex.Protocol(
-                $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}."));
+        EnsureResponseWithinMax(responseHeader);
 
         int respLen = (int)responseHeader.CompressedLength;
         byte[] responsePayload = new byte[respLen];
@@ -468,9 +532,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
     private RawFrame ReadBodySync(WireHeader responseHeader)
     {
-        if (responseHeader.CompressedLength > _maxResponseSize)
-            throw Poison(_ex.Protocol(
-                $"Response payload {responseHeader.CompressedLength} bytes exceeds maximum allowed size {_maxResponseSize}."));
+        EnsureResponseWithinMax(responseHeader);
 
         int respLen = (int)responseHeader.CompressedLength;
         byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
@@ -491,6 +553,18 @@ public sealed class CeleriantConnection : IAsyncDisposable
         {
             ArrayPool<byte>.Shared.Return(responsePayload);
         }
+    }
+
+    /// <summary>
+    /// Both lengths are server-supplied and the uncompressed one sizes the decompression buffer,
+    /// so both are checked before any allocation.
+    /// </summary>
+    private void EnsureResponseWithinMax(WireHeader header)
+    {
+        if (header.CompressedLength > _maxResponseSize || header.UncompressedLength > _maxResponseSize)
+            throw Poison(_ex.Protocol(
+                $"Response payload (compressed {header.CompressedLength} bytes, uncompressed "
+                + $"{header.UncompressedLength} bytes) exceeds maximum allowed size {_maxResponseSize}."));
     }
 
     private byte[] Decompress(WireHeader header, byte[] payload)

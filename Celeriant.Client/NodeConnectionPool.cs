@@ -22,10 +22,18 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
             options.IdleTimeout,
             ct => CreateConnectionAsync(address, options, dictCache, ct),
             static client => client.IsPoisoned,
-            StorageTransportExceptionFactory.Instance);
+            StorageTransportExceptionFactory.Instance,
+            static client => client.IsUnfitForReuse,
+            // A ProtocolException from the factory means the node answered (an unresolvable
+            // dictionary sha, a malformed Identify reply). The node is up, so it must not open
+            // the breaker.
+            static ex => ex is not ProtocolException);
     }
 
     public string Address => _inner.Address;
+
+    /// <inheritdoc />
+    public bool IsCircuitOpen => _inner.IsCircuitOpen;
 
     /// <inheritdoc />
     public async Task<PooledConnection> GetConnectionAsync(CancellationToken ct)
@@ -62,7 +70,8 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
     /// </para>
     /// </summary>
     private static bool LeavesConnectionDirty(CeleriantClientException error)
-        => error is ConnectionFailedException or CeleriantTimeoutException or ProtocolException;
+        => error is ConnectionFailedException or CeleriantTimeoutException or ProtocolException
+                 or RequestOutcomeUnknownException;
 
     public ValueTask DisposeAsync() => _inner.DisposeAsync();
 
@@ -78,10 +87,20 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
 
         if (options.IdentityConfig is { } identityConfig)
         {
-            // Advertise our known dictionary sha so the server can skip resending its bytes,
-            // and resolve a confirmed-but-unsent sha from the shared pool cache.
-            await client.IdentifyAsync(identityConfig, dictCache.LastSha, dictCache.DictForSha, ct)
-                .ConfigureAwait(false);
+            // The socket is open and nothing else holds it. A handshake that throws must close it
+            // here or it leaks until a finalizer runs.
+            try
+            {
+                // Advertise our known dictionary sha so the server can skip resending its bytes,
+                // and resolve a confirmed-but-unsent sha from the shared pool cache.
+                await client.IdentifyAsync(identityConfig, dictCache.LastSha, dictCache.DictForSha, ct)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
 
             // If this connection received (or confirmed) a dictionary, share it pool-wide.
             if (client.CurrentDict is { } dict)

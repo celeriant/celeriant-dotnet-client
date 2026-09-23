@@ -12,6 +12,12 @@ internal interface INodeConnectionPool : IAsyncDisposable
     string Address { get; }
 
     /// <summary>
+    /// True inside the breaker window after a failed connection attempt. Routing checks it before
+    /// following a hint into a node it would only fast-fail on.
+    /// </summary>
+    bool IsCircuitOpen { get; }
+
+    /// <summary>
     /// Lease a connection to this node. Returns an idle connection if available,
     /// or creates a new one if under the limit.
     /// </summary>

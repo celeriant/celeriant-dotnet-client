@@ -26,6 +26,8 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
     private readonly TimeSpan _idleTimeout;
     private readonly Func<CancellationToken, Task<TConn>> _factory;
     private readonly Func<TConn, bool> _isBroken;
+    private readonly Func<TConn, bool>? _isUnfitForReuse;
+    private readonly Func<Exception, bool>? _isDialFailure;
     private readonly ITransportExceptionFactory _ex;
     private readonly Channel<(TConn client, DateTimeOffset lastUsed)> _idle;
     private readonly SemaphoreSlim _totalSem;
@@ -53,12 +55,16 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
         TimeSpan idleTimeout,
         Func<CancellationToken, Task<TConn>> connectionFactory,
         Func<TConn, bool> isBroken,
-        ITransportExceptionFactory exceptionFactory)
+        ITransportExceptionFactory exceptionFactory,
+        Func<TConn, bool>? isUnfitForReuse = null,
+        Func<Exception, bool>? isDialFailure = null)
     {
         _address = address;
         _idleTimeout = idleTimeout;
         _factory = connectionFactory;
         _isBroken = isBroken;
+        _isUnfitForReuse = isUnfitForReuse;
+        _isDialFailure = isDialFailure;
         _ex = exceptionFactory;
 
         _idle = Channel.CreateBounded<(TConn, DateTimeOffset)>(
@@ -71,7 +77,11 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
         _totalSem = new SemaphoreSlim(maxConnections, maxConnections);
     }
 
-    private bool IsCircuitOpen
+    /// <summary>
+    /// Whether this node is inside its post-failure fast-fail window. Public so leader routing can
+    /// ask before following a redirect into a node it would only fast-fail on, without dialling it.
+    /// </summary>
+    public bool IsCircuitOpen
     {
         get
         {
@@ -86,7 +96,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
         ThrowIfDisposed();
 
         if (IsCircuitOpen)
-            throw _ex.ConnectionFailed($"Circuit breaker open for {_address}.");
+            throw CircuitOpenError();
 
         // Fast path: reuse a fresh idle connection.
         while (_idle.Reader.TryRead(out var entry))
@@ -210,8 +220,16 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
     // Private helpers
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Called only on entries coming out of <c>_idle</c>, never on a connection just created, so
+    /// the socket peek in <c>_isUnfitForReuse</c> is paid once per reuse. Without the peek a peer
+    /// that closed while the connection sat idle is discovered only after the request is in the
+    /// send buffer, where the caller can no longer be told the node never saw it.
+    /// </summary>
     private bool IsStale((TConn client, DateTimeOffset lastUsed) entry)
-        => DateTimeOffset.UtcNow - entry.lastUsed > _idleTimeout || _isBroken(entry.client);
+        => DateTimeOffset.UtcNow - entry.lastUsed > _idleTimeout
+            || _isBroken(entry.client)
+            || _isUnfitForReuse?.Invoke(entry.client) == true;
 
     /// <summary>Create a connection through the dial gate + circuit breaker. Caller holds a <c>_totalSem</c> permit.</summary>
     private async Task<PooledLease<TConn>> CreateGatedConnectionAsync(CancellationToken ct)
@@ -223,7 +241,7 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             {
                 // Re-check after waiting: breaker may have tripped while queued.
                 if (IsCircuitOpen)
-                    throw _ex.ConnectionFailed($"Circuit breaker open for {_address}.");
+                    throw CircuitOpenError();
 
                 // Someone ahead of us may have returned a fresh connection while we queued.
                 //
@@ -245,7 +263,25 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
                     ReleasePermit();
                 }
 
-                var client = await _factory(ct).ConfigureAwait(false);
+                TConn client;
+                try
+                {
+                    client = await _factory(ct).ConfigureAwait(false);
+                }
+                // Only a dial failure arms the breaker. A caller's own cancellation says nothing
+                // about the node. A failure the node answered with is excluded through
+                // isDialFailure, since only the product knows which of its exceptions mean the
+                // handshake got a reply.
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    if (_isDialFailure?.Invoke(ex) ?? true)
+                        Interlocked.Exchange(ref _lastConnectFailureTicks, DateTimeOffset.UtcNow.Ticks);
+                    throw;
+                }
 
                 // Dialled into a pool that has gone away. Handing this out would leak the socket
                 // it just opened: nothing will ever return the lease, and the pool that would
@@ -258,11 +294,6 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
 
                 Interlocked.Exchange(ref _lastConnectFailureTicks, 0);
                 return new PooledLease<TConn>(client, ReturnConnectionAsync);
-            }
-            catch
-            {
-                Interlocked.Exchange(ref _lastConnectFailureTicks, DateTimeOffset.UtcNow.Ticks);
-                throw;
             }
             finally
             {
@@ -311,8 +342,13 @@ public sealed class ConnectionPool<TConn> : IAsyncDisposable where TConn : IAsyn
             throw DisposedError();
     }
 
-    private Exception DisposedError()
-        => _ex.ConnectionFailed($"Connection pool for {_address} has been disposed.");
+    /// <summary>
+    /// The pool refused locally, before any node was contacted. Not a connection failure: it is no
+    /// evidence about the node, so routing must not retire a cached leader on it.
+    /// </summary>
+    private Exception DisposedError() => _ex.PoolUnavailable(_address, "the pool has been disposed");
+
+    private Exception CircuitOpenError() => _ex.PoolUnavailable(_address, "its circuit breaker is open");
 
     /// <summary>
     /// Give a permit back, unless the pool is going away. Disposal races every caller still in

@@ -41,6 +41,14 @@ public class CompressionTests
     public void RoundTrip_Large() => VerifyRoundTrip(MakeLargePayload());
 
     [Fact]
+    public void Decompress_UncompressedLengthAboveIntMax_Throws()
+    {
+        var compressed = DictCompression.CompressWithDict(SmallPayload, Dict);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => DictCompression.DecompressWithDict(compressed, uint.MaxValue, Dict));
+    }
+
+    [Fact]
     public void Compressed_SmallerThanOriginal_ForLargeRepetitivePayload()
     {
         var payload = MakeLargePayload();

@@ -19,4 +19,19 @@ public interface ITransportExceptionFactory
 
     /// <summary>The peer violated the wire protocol (bad frame, unexpected type, undecodable body).</summary>
     Exception Protocol(string message, Exception? inner = null);
+
+    /// <summary>
+    /// The pool itself refused before any node was contacted: its circuit breaker is open, or it
+    /// has been disposed. Purely local, so it says nothing about the node's health and a caller
+    /// must not read it as "this node is down".
+    /// </summary>
+    Exception PoolUnavailable(string address, string reason)
+        => ConnectionFailed($"Connection pool for {address} is unavailable: {reason}.");
+
+    /// <summary>
+    /// The request was fully written and no response came back. The node may or may not have
+    /// applied it, so it must never be re-sent.
+    /// </summary>
+    Exception RequestOutcomeUnknown(string message, Exception? inner = null)
+        => ConnectionFailed(message, inner);
 }

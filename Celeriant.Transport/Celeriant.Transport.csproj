@@ -15,7 +15,7 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>Celeriant.Transport</PackageId>
-    <Version>0.8.0</Version>
+    <Version>0.9.0</Version>
     <Authors>Celeriant</Authors>
     <Description>Shared transport layer for Celeriant .NET clients: wire framing, zstd-dictionary compression, the Identify handshake, and the pooled TCP/TLS connection. Consumed by Celeriant.Client; the body codec and message-type ids are injected per product.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

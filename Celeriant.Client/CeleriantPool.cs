@@ -37,10 +37,17 @@ namespace Celeriant.Client;
 /// <see cref="NotLeaderException"/>, which the pool absorbs and retries transparently — the caller
 /// sees no error. A leader that <b>crashes</b> is different: until the cluster elects a new leader
 /// (typically a few seconds) there is no leader to route to, so leader operations during that window
-/// throw <see cref="ConnectionFailedException"/> ("connection refused", then briefly "circuit breaker
-/// open"). These are transient — retry with backoff and the write succeeds once the new leader is
-/// elected. The pool does not retry across the election window itself, because only the caller knows
-/// whether re-issuing a write that may or may not have landed is safe.
+/// throw <see cref="ConnectionFailedException"/> ("connection refused"), then briefly
+/// <see cref="PoolUnavailableException"/> while that node's breaker is open. Both are transient:
+/// retry with backoff and the write succeeds once the new leader is elected. The pool does not retry
+/// across the election window itself, because only the caller knows whether re-issuing a write that
+/// may or may not have landed is safe.
+/// </para>
+///
+/// <para>
+/// <see cref="RequestOutcomeUnknownException"/> is that judgement handed to the caller: the request
+/// was fully written and nothing came back. Sending it to a second node is how one write becomes
+/// two events, so the pool never does. Re-issuing it is the caller's decision.
 /// </para>
 ///
 /// <para>
@@ -318,7 +325,7 @@ public sealed class CeleriantPool : ICeleriantPool
     public IAsyncEnumerable<OrgListItem> ListOrgsAsync(
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListOrgsAsyncCore(options, ct);
+        => ListOrgsAsyncCore(ListExtensions.ResolveOptions(options), ct);
 
     private async IAsyncEnumerable<OrgListItem> ListOrgsAsyncCore(
         ListOptions? options,
@@ -339,7 +346,7 @@ public sealed class CeleriantPool : ICeleriantPool
         Guid? orgId = null,
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListAggregateTypesAsyncCore(orgId, options, ct);
+        => ListAggregateTypesAsyncCore(orgId, ListExtensions.ResolveOptions(options), ct);
 
     private async IAsyncEnumerable<AggregateTypeListItem> ListAggregateTypesAsyncCore(
         Guid? orgId,
@@ -362,7 +369,7 @@ public sealed class CeleriantPool : ICeleriantPool
         Guid? aggregateTypeId = null,
         ListOptions? options = null,
         CancellationToken ct = default)
-        => ListAggregatesAsyncCore(orgId, aggregateTypeId, options, ct);
+        => ListAggregatesAsyncCore(orgId, aggregateTypeId, ListExtensions.ResolveOptions(options), ct);
 
     private async IAsyncEnumerable<AggregateStats> ListAggregatesAsyncCore(
         Guid? orgId,
@@ -404,6 +411,8 @@ public sealed class CeleriantPool : ICeleriantPool
             TlsConfig = _options.TlsConfig,
             IdentityConfig = _options.IdentityConfig,
             ConnectionTimeout = options?.ConnectionTimeout ?? _options.ConnectionTimeout,
+            MaxRequestSize = _options.MaxRequestSize,
+            MaxResponseSize = _options.MaxResponseSize,
         };
 
         // Try each candidate in routing order (leader first by default,
@@ -424,6 +433,12 @@ public sealed class CeleriantPool : ICeleriantPool
             catch (ConnectionTimeoutException) when (i < nodeAddresses.Length - 1)
             {
                 // Dial timeout: failover-class, try next.
+                ClearLeaderIfItWasTheFirstCandidate(i, addr);
+            }
+            catch (RequestOutcomeUnknownException) when (i < nodeAddresses.Length - 1)
+            {
+                // The subscribe went out and the node never answered. A subscription changes
+                // nothing, so it is safe to raise again on the next candidate.
                 ClearLeaderIfItWasTheFirstCandidate(i, addr);
             }
         }
@@ -499,6 +514,10 @@ public sealed class CeleriantPool : ICeleriantPool
             catch (ConnectionTimeoutException) when (i < nodeAddresses.Length - 1)
             {
                 // Dial timeout (black-holed node): failover-class, try next.
+            }
+            catch (PoolUnavailableException) when (i < nodeAddresses.Length - 1)
+            {
+                // Local refusal: no evidence about the node, so the leader cache stands.
             }
         }
 
@@ -635,6 +654,17 @@ public sealed class CeleriantPool : ICeleriantPool
                 // Dial timeout (black-holed node): failover-class, unlike a request timeout.
                 continue;
             }
+            catch (PoolUnavailableException) when (!lastCandidate)
+            {
+                // The pool refused locally. That says nothing about the node, so the cached leader
+                // stands; another node can still serve the read.
+                continue;
+            }
+            catch (RequestOutcomeUnknownException) when (!lastCandidate)
+            {
+                // A read is safe to re-issue, so a lost response is just another broken candidate.
+                continue;
+            }
             catch (CeleriantTimeoutException) when (toFollowers && !lastCandidate)
             {
                 continue;
@@ -649,15 +679,33 @@ public sealed class CeleriantPool : ICeleriantPool
     }
 
     /// <summary>
-    /// Execute a leader-bound operation (write, delete, trim) with automatic failover.
+    /// Refuse a payload no node could accept before any node is dialled. The transport makes the
+    /// same check, but only once a connection is in hand: without this a caller's own payload error
+    /// costs a dial, and against an unreachable node surfaces as a routing failure. Event bytes are
+    /// a lower bound on the serialized body, so this never rejects what the transport would accept.
+    /// </summary>
+    private void EnsureRequestWithinMax(ClientRequest request)
+    {
+        long payloadBytes = CeleriantClient.PayloadBytes(request);
+        if (payloadBytes > _options.MaxRequestSize)
+            throw new ArgumentException(
+                $"Request payload ({payloadBytes} bytes) exceeds MaxRequestSize ({_options.MaxRequestSize} bytes).");
+    }
+
+    /// <summary>
+    /// Execute a leader-bound operation (write, delete, trim) as one walk over candidate
+    /// addresses: the cached leader first, then untried seeds in options order. A
+    /// <see cref="NotLeaderException"/> hint jumps the walk to the hinted node and updates the
+    /// cache; if that node fails too the walk resumes with the seeds.
     ///
-    /// <para>Handles two failure modes:</para>
-    /// <list type="bullet">
-    ///   <item><see cref="NotLeaderException"/>: the server reports a leader change.
-    ///   The pool updates its leader address (and discovers new nodes) and retries.</item>
-    ///   <item><see cref="ConnectionFailedException"/>: the leader is unreachable.
-    ///   The pool tries each known node until one accepts the write or redirects to the leader.</item>
-    /// </list>
+    /// <para>Only a <see cref="NotLeaderException"/> retires an address, so a node whose connection
+    /// failed can still be reached by a later hint. Hops and seed attempts share one fixed budget,
+    /// so a circular hint chain terminates.</para>
+    ///
+    /// <para>Not walked: <see cref="PoolUnavailableException"/> (no node was contacted, and no
+    /// follower can serve a write), <see cref="RequestOutcomeUnknownException"/> (the request is
+    /// on the wire, so re-sending could duplicate it), and <see cref="ProtocolException"/> or a
+    /// request timeout (the node answered, or may have applied the operation).</para>
     /// </summary>
     private async Task<T> ExecuteLeaderOperationAsync<T>(
         ClientRequest request,
@@ -665,82 +713,145 @@ public sealed class CeleriantPool : ICeleriantPool
         CancellationToken ct)
     {
         ThrowIfDisposed();
+        EnsureRequestWithinMax(request);
 
-        string currentTarget = _leaderAddress;
-        var triedNodes = new HashSet<string>();
+        string firstTarget = _leaderAddress;
+        string currentTarget = firstTarget;
 
-        // Worst case: try every known node + 1 for a newly discovered leader.
-        int maxAttempts = _nodePools.Count + 1;
+        // Allocated only once a node answers NotLeader, so the success path allocates nothing.
+        string[]? answered = null;
+        int answeredCount = 0;
+        string? nextHint = null;
 
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        // Seeds are walked in options order from a forward-only cursor, so each is visited at most
+        // once whatever the hints do.
+        int seedCursor = 0;
+        int seedCount = SeedCount;
+
+        // Hops are capped separately so a chain of live redirects cannot eat the attempts an
+        // untried seed needs.
+        int hops = 0;
+
+        // Fixed before the first attempt, so a hint cycle terminates whatever the nodes claim.
+        int maxAttempts = seedCount + MaxHintHops;
+
+        for (int attempt = 0; ; attempt++)
         {
-            triedNodes.Add(currentTarget);
-            var pool = GetOrCreateNodePool(currentTarget);
-
+            CeleriantClientException lastError;
             try
             {
-                var response = await pool.ExecuteRequestAsync(request, ct).ConfigureAwait(false);
+                var response = await GetOrCreateNodePool(currentTarget)
+                    .ExecuteRequestAsync(request, ct).ConfigureAwait(false);
 
-                // Write succeeded: this node is the leader.
+                // This node accepted the write, so it is the leader.
                 _leaderAddress = currentTarget;
                 return mapResponse(response);
             }
-            catch (NotLeaderException ex) when (ex.LeaderAddress is not null)
+            catch (NotLeaderException ex)
             {
-                // Register the pool before publishing the leader so concurrent
-                // reads never see an address without a backing pool.
-                GetOrCreateNodePool(ex.LeaderAddress);
-                _leaderAddress = ex.LeaderAddress;
-                currentTarget = ex.LeaderAddress;
-                // Recalculate max attempts since we may have discovered a new node.
-                maxAttempts = _nodePools.Count + 1;
-            }
-            catch (NotLeaderException)
-            {
-                // No leader address provided. Try next known node.
-                var next = GetNextUntried(triedNodes);
-                if (next is null) throw;
-                currentTarget = next;
-            }
-            catch (ConnectionFailedException)
-            {
-                // Connection dropped or unreachable. Try next known node.
-                var next = GetNextUntried(triedNodes);
-                if (next is null) throw;
-                currentTarget = next;
-            }
-            catch (CeleriantTimeoutException)
-            {
-                // Connection or request timed out. Try next known node.
-                var next = GetNextUntried(triedNodes);
-                if (next is null) throw;
-                currentTarget = next;
-            }
-            catch (ServerBusyException)
-            {
-                // Server too busy to route request. Try next known node.
-                var next = GetNextUntried(triedNodes);
-                if (next is null) throw;
-                currentTarget = next;
-            }
-        }
+                // Retired before the hint is read, so a node that hints at itself is not dialled
+                // twice.
+                answered ??= new string[maxAttempts];
+                answered[answeredCount++] = currentTarget;
 
-        throw new ConnectionFailedException(
-            $"Failed to find a reachable leader after trying {triedNodes.Count} node(s).");
+                if (ex.LeaderAddress is { } hint && hops < MaxHintHops
+                    && !HasAnswered(answered, answeredCount, hint)
+                    && !IsNodeCircuitOpen(hint))
+                {
+                    nextHint = hint;
+                }
+                lastError = ex;
+            }
+            catch (ConnectionFailedException ex)
+            {
+                // Pre-send: the node was never reached, so another one may still be the leader.
+                lastError = ex;
+            }
+            catch (ConnectionTimeoutException ex)
+            {
+                // A dial or handshake deadline is also pre-send. Its CeleriantTimeoutException base
+                // is deliberately not caught: after the request is written it means the node may
+                // have applied it.
+                lastError = ex;
+            }
+            catch (ServerBusyException ex)
+            {
+                lastError = ex;
+            }
+
+            if (attempt >= maxAttempts - 1)
+                throw ErrWalkExhausted(currentTarget, lastError);
+
+            if (nextHint is { } target)
+            {
+                nextHint = null;
+                hops++;
+                // Register the pool before publishing the leader so concurrent reads never see an
+                // address without a backing pool.
+                GetOrCreateNodePool(target);
+                _leaderAddress = target;
+                currentTarget = target;
+                continue;
+            }
+
+            string? seed = NextUntriedSeed(ref seedCursor, seedCount, firstTarget, answered, answeredCount);
+            if (seed is null)
+                throw ErrWalkExhausted(currentTarget, lastError);
+            currentTarget = seed;
+        }
     }
 
     /// <summary>
-    /// Find the next known node address that hasn't been tried yet.
+    /// How many redirects one walk may follow. A leader election settles in one or two hops; past
+    /// that the hints are chasing each other, and the seeds are the better use of what is left.
     /// </summary>
-    private string? GetNextUntried(HashSet<string> tried)
+    private const int MaxHintHops = 3;
+
+    /// <summary>Seed addresses in options order: the primary, then <c>SeedAddresses</c>.</summary>
+    private int SeedCount => 1 + (_options.SeedAddresses?.Count ?? 0);
+
+    private string SeedAt(int index) => index == 0 ? _options.Address : _options.SeedAddresses![index - 1];
+
+    /// <summary>
+    /// The next seed the walk has neither started from nor had a definitive answer from. The
+    /// cursor only moves forward, so it is independent of the hints and a stale hint cannot
+    /// starve an untried seed.
+    /// </summary>
+    private string? NextUntriedSeed(
+        ref int cursor, int seedCount, string firstTarget, string[]? answered, int answeredCount)
     {
-        foreach (var addr in _nodePools.Keys)
+        while (cursor < seedCount)
         {
-            if (!tried.Contains(addr))
+            var addr = SeedAt(cursor++);
+            if (addr != firstTarget && !HasAnswered(answered, answeredCount, addr))
                 return addr;
         }
         return null;
     }
+
+    private static bool HasAnswered(string[]? answered, int count, string address)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            if (answered![i] == address)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a node already dialled is inside its breaker cooldown. Never creates a pool: a hint
+    /// the walk is about to skip must not grow the node map.
+    /// </summary>
+    private bool IsNodeCircuitOpen(string address)
+        => _nodePools.TryGetValue(address, out var pool) && pool.IsCircuitOpen;
+
+    /// <summary>
+    /// The walk ran out of candidates. Names the node it gave up on and carries what that node
+    /// produced as the inner exception, so the caller can tell which node to look at.
+    /// </summary>
+    private static ConnectionFailedException ErrWalkExhausted(string address, CeleriantClientException last)
+        => new($"No leader found; last attempt to {address} failed: {last.Message}", last);
 
     private void ThrowIfDisposed()
     {

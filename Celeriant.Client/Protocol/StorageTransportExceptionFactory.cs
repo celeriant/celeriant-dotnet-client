@@ -25,4 +25,12 @@ internal sealed class StorageTransportExceptionFactory : ITransportExceptionFact
 
     public Exception Protocol(string message, Exception? inner = null)
         => inner is null ? new ProtocolException(message) : new ProtocolException(message, inner);
+
+    public Exception PoolUnavailable(string address, string reason)
+        => new PoolUnavailableException(address, reason);
+
+    public Exception RequestOutcomeUnknown(string message, Exception? inner = null)
+        => inner is null
+            ? new RequestOutcomeUnknownException(message)
+            : new RequestOutcomeUnknownException(message, inner);
 }

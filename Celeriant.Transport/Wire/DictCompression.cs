@@ -25,6 +25,10 @@ public static class DictCompression
 
     public static byte[] DecompressWithDict(byte[] data, uint uncompressedLength, byte[] dict)
     {
+        if (uncompressedLength > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(uncompressedLength), uncompressedLength,
+                "Uncompressed length exceeds the maximum supported size.");
+
         using var decompressor = new Decompressor();
         decompressor.LoadDictionary(dict);
         return decompressor.Unwrap(data, (int)uncompressedLength).ToArray();

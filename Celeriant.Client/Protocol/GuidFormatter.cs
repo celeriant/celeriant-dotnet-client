@@ -73,9 +73,19 @@ public sealed class CeleriantGuidFormatter : IMessagePackFormatter<Guid>
 
     public Guid Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
     {
+        // A Rust u128 is exactly bin8 c4 10. Without the type and length checks a short bin
+        // zero-pads and a long bin truncates into a plausible but wrong Guid.
+        if (reader.NextMessagePackType is not (MessagePackType.Binary or MessagePackType.Nil))
+            throw new MessagePackSerializationException(
+                $"Expected a 16-byte bin Guid, got {reader.NextMessagePackType}.");
+
         ReadOnlySequence<byte>? bytes = reader.ReadBytes();
         if (bytes is null)
             return Guid.Empty;
+
+        if (bytes.Value.Length != 16)
+            throw new MessagePackSerializationException(
+                $"Expected a 16-byte bin Guid, got {bytes.Value.Length} bytes.");
 
         byte[] buf = new byte[16];
         bytes.Value.CopyTo(buf);

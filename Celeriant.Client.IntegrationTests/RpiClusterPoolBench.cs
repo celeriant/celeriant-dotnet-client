@@ -90,6 +90,7 @@ public sealed class RpiClusterPoolBench
         await pool.WriteAsync(smokeKey, [new AggregateEvent
         {
             EventTypeMajor = 1,
+            EventTimestamp = DateTimeOffset.UtcNow,
             EventValue = "smoke-test"u8.ToArray(),
         }], smokeClientId);
         Console.WriteLine("  Write OK\n");
@@ -169,6 +170,7 @@ public sealed class RpiClusterPoolBench
                     var ev = new AggregateEvent
                     {
                         EventTypeMajor = 1,
+                        EventTimestamp = DateTimeOffset.UtcNow,
                         EventValue = Encoding.UTF8.GetBytes($"[t-{taskId}-r-{seq}] hello"),
                     };
 

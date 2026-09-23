@@ -43,4 +43,15 @@ public sealed class WatchOptions
     /// </para>
     /// </summary>
     public TimeSpan? ConnectionTimeout { get; init; }
+
+    /// <summary>Maximum request payload size in bytes. Null keeps the client default (10 MB).</summary>
+    public long? MaxRequestSize { get; init; }
+
+    /// <summary>
+    /// Maximum response payload size in bytes; bounds a single watch page. A page past the cap
+    /// throws <see cref="Errors.ProtocolException"/>. Null keeps the client default (64 MB).
+    /// <see cref="CeleriantPool"/> fills both caps from its own options so a pool-dialled watch
+    /// honours the same memory bound as every pooled request.
+    /// </summary>
+    public long? MaxResponseSize { get; init; }
 }

@@ -681,6 +681,11 @@ public sealed class WatchConnection : IAsyncDisposable
             _options.TlsConfig,
             ct).ConfigureAwait(false);
 
+        if (_options.MaxRequestSize is { } maxRequestSize)
+            client.WithMaxRequestSize(maxRequestSize);
+        if (_options.MaxResponseSize is { } maxResponseSize)
+            client.WithMaxResponseSize(maxResponseSize);
+
         if (_options.IdentityConfig is { } identityConfig)
         {
             try

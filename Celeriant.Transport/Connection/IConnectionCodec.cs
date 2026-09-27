@@ -11,6 +11,9 @@ public interface IConnectionCodec
     /// <summary>Protocol version written to every outbound <see cref="WireHeader"/> (V2=bincode, V3=MessagePack).</summary>
     uint ProtocolVersion { get; }
 
+    /// <summary>Whether Identify replies must echo their request correlation id.</summary>
+    bool RequireIdentifyCorrelation => false;
+
     /// <summary>Message-type id of the Identify request (celeriant_msg type 14 for all products).</summary>
     uint IdentifyRequestType { get; }
 
@@ -29,4 +32,8 @@ public interface IConnectionCodec
     /// exchange comes back as something other than <see cref="IdentifyResponseType"/>.
     /// </summary>
     Exception? TryMapErrorFrame(uint messageType, ReadOnlySpan<byte> body);
+
+    /// <summary>Map an Identify error, checking request binding when the codec supports it.</summary>
+    Exception? TryMapIdentifyErrorFrame(uint messageType, ReadOnlySpan<byte> body, Guid? correlationId)
+        => TryMapErrorFrame(messageType, body);
 }

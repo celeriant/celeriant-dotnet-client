@@ -64,7 +64,7 @@ public class CeleriantConnectionDisposeDuringInflightTests
             await using var conn = await CeleriantConnection.ConnectAsync(
                 $"127.0.0.1:{port}", TimeSpan.FromSeconds(5), null, new Codec(), new ThrowingExceptionFactory());
 
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
 
             var inflight = conn.SendAsync(DataRequest, [1, 2, 3], false, 0);
 
@@ -116,7 +116,7 @@ public class CeleriantConnectionDisposeDuringInflightTests
             await using var conn = await CeleriantConnection.ConnectAsync(
                 $"127.0.0.1:{port}", TimeSpan.FromSeconds(5), null, new Codec(), new ThrowingExceptionFactory());
 
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
 
             var inflight = conn.SendAsync(DataRequest, [1, 2, 3], false, 0);   // acquires the lock
             await Task.Delay(200);

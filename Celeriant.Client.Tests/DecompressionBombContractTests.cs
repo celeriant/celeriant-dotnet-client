@@ -58,7 +58,7 @@ public class DecompressionBombContractTests(ITestOutputHelper output)
             await Task.Delay(3000);
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             var ex = await Record.ExceptionAsync(() => conn.SendAsync(DataRequest, [1], false, 0));
             output.WriteLine($"compressed_length-over-max => {Describe(ex)}");
             Assert.IsType<InvalidDataException>(ex);
@@ -89,7 +89,7 @@ public class DecompressionBombContractTests(ITestOutputHelper output)
             await Task.Delay(3000);
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             long before = GC.GetTotalAllocatedBytes(precise: true);
             Exception? ex = await Record.ExceptionAsync(() => conn.SendAsync(DataRequest, [1], false, 0));
             long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;

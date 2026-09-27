@@ -1,7 +1,7 @@
 namespace Celeriant.Client.Protocol;
 
 /// <summary>
-/// Wire protocol message type IDs for V3 (MessagePack) protocol.
+/// Wire protocol message type IDs for V5 (MessagePack) protocol.
 /// These correspond to the message_type field in the 17-byte WireHeader.
 /// </summary>
 public static class MessageTypes
@@ -37,6 +37,8 @@ public static class MessageTypes
         public const uint ListAggregateTypes = 10;
         public const uint ListAggregates = 11;
         public const uint RegisterSchema = 12;
+        public const uint WriteConflict = 13;
+        public const uint DeleteConflict = 14;
         public const uint Identify = 16;
     }
 }

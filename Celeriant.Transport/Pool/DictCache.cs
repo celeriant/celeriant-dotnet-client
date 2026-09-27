@@ -1,40 +1,50 @@
 namespace Celeriant.Transport;
 
 /// <summary>
-/// Pool-wide, content-addressed compression-dictionary cache shared across all node pools. New
-/// connections advertise <see cref="LastSha"/> as <c>known_dict_sha256</c> during Identify so the
-/// server can skip re-shipping the (~14&#160;KiB) dictionary bytes when they already match; a
-/// sha-only confirmation is resolved through <see cref="DictForSha"/>. Thread-safe.
+/// The dictionaries a pool resolves without the server shipping them: the built-in every client
+/// bundles, and the one cluster dictionary learned last. Bounded at those two: learning a new
+/// dictionary replaces the previous one. Shared by every connection of a pool, so the pool learns a
+/// cluster dictionary once. Thread-safe.
+///
+/// <para>
+/// A connection advertises <see cref="Snapshot"/> in Identify and resolves the server's sha-only
+/// confirm against that snapshot with <see cref="Resolve"/>, never against the shared slot: another
+/// connection may learn a different dictionary, evicting the advertised one, before the confirm
+/// arrives. Mirrors the Rust client's <c>dict_cache.rs</c>.
+/// </para>
 /// </summary>
 public sealed class DictCache
 {
-    private readonly object _lock = new();
-    private readonly Dictionary<string, byte[]> _cache = new();
-    private string? _lastSha;
+    private readonly object _learnLock = new();
 
-    /// <summary>Most recently negotiated dictionary sha for this cluster, or null.</summary>
-    public string? LastSha
-    {
-        get { lock (_lock) return _lastSha; }
-    }
+    // Replaced whole, never mutated, so a reader sees a consistent (sha, bytes) pair without a lock.
+    private volatile CachedDict _learned = BuiltinDictionary.Dict;
 
-    /// <summary>Cached dictionary bytes for <paramref name="sha"/>, or null if not cached.</summary>
-    public byte[]? DictForSha(string sha)
-    {
-        lock (_lock)
-            return _cache.TryGetValue(sha, out var bytes) ? bytes : null;
-    }
+    /// <summary>The dictionary to advertise in Identify: the last learned, or the built-in.</summary>
+    public CachedDict Snapshot() => _learned;
+
+    /// <summary>The bytes for <paramref name="sha"/> if it is the learned dictionary or the built-in, else null.</summary>
+    public byte[]? Lookup(string sha) => Resolve(_learned, sha);
 
     /// <summary>
-    /// Record <paramref name="bytes"/> under <paramref name="sha"/> and mark it the last-known
-    /// cluster dictionary. Content-addressed: re-inserting an existing sha keeps the original bytes.
+    /// Make <paramref name="dict"/> the learned dictionary. Relearning the sha already held keeps the
+    /// first instance, so every connection shares one copy of the bytes.
     /// </summary>
-    public void CacheDict(string sha, byte[] bytes)
+    public void Learn(CachedDict dict)
     {
-        lock (_lock)
+        lock (_learnLock)
         {
-            _cache.TryAdd(sha, bytes);
-            _lastSha = sha;
+            if (_learned.Sha != dict.Sha)
+                _learned = dict;
         }
+    }
+
+    /// <summary>The bytes for <paramref name="sha"/> if it is <paramref name="advertised"/> or the built-in, else null.</summary>
+    public static byte[]? Resolve(CachedDict advertised, string sha)
+    {
+        if (advertised.Sha == sha)
+            return advertised.Bytes;
+        CachedDict builtin = BuiltinDictionary.Dict;
+        return builtin.Sha == sha ? builtin.Bytes : null;
     }
 }

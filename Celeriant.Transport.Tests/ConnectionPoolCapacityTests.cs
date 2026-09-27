@@ -8,7 +8,7 @@ namespace Celeriant.Transport.Tests;
 /// and then parks callers for ever, so every wait here carries a hard budget: a leak fails loudly
 /// instead of hanging CI.
 /// </summary>
-public class ConnectionPoolCapacityOracleTests
+public class ConnectionPoolCapacityTests
 {
     /// <summary>How long a single lease request may take before it counts as a leaked slot.</summary>
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
@@ -54,7 +54,7 @@ public class ConnectionPoolCapacityOracleTests
 
     private static ConnectionPool<FakeConn> NewPool(int maxConnections, TimeSpan idleTimeout, CountingFactory factory)
         => new(
-            "fake://capacity-oracle",
+            "fake://capacity",
             maxConnections,
             idleTimeout,
             factory.CreateAsync,

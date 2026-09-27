@@ -23,7 +23,7 @@ namespace Celeriant.Client.Tests;
 /// the way out rather than left half-open against a node that is already sick.
 /// </para>
 /// </summary>
-public class WatchIdentifyTimeoutOracleTests
+public class WatchIdentifyTimeoutTests
 {
     /// <summary>How long a call gets before the test calls it hung. Never used as a race timer.</summary>
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);

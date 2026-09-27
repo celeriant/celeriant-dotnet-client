@@ -26,9 +26,9 @@ public sealed class IdentifyResponse
     public string? CompressionDictSha256 { get; init; }
 
     /// <summary>
-    /// Raw dictionary bytes (~14&#160;KiB). Present only when the client did not already
-    /// advertise a matching <c>KnownDictSha256</c>; otherwise null and the bytes are
-    /// resolved from the pool's dictionary cache by <see cref="CompressionDictSha256"/>.
+    /// Raw dictionary bytes. Present only when the client did not already advertise a matching
+    /// <c>KnownDictSha256</c>; otherwise null and the bytes are resolved by
+    /// <see cref="CompressionDictSha256"/> against the dictionary the connection advertised.
     /// </summary>
     [Key(4)]
     [MessagePackFormatter(typeof(SeqOrBinBytesFormatter))]

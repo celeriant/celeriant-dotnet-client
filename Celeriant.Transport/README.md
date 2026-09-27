@@ -8,7 +8,7 @@ You normally don't reference this package directly: `Celeriant.Client` depends o
 and exposes the storage-facing API. Reference it yourself only when building a new
 Celeriant product client on the shared wire protocol; implement
 `ITransportExceptionFactory` to surface transport failures as your product's own
-exception types.
+exception types. Keep it at the same version as `Celeriant.Client`.
 
 - [Celeriant](https://celeriant.io)
 - [GitHub](https://github.com/celeriant/celeriant-dotnet-client)

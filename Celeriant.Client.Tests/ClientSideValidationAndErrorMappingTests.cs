@@ -8,16 +8,14 @@ using Moq;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Regression guards for the fixes found by the blind adversarial API-surface program (2026-08-29).
-/// Each test pins a defect a black-box attacker reached from the public surface; the harnesses that
-/// found them are archived under <c>session/harness/</c>. See <c>session/findings/</c> for the write-ups.
+/// Public API regressions for validation, response decoding and error classification.
 /// </summary>
-public class AdversarialRegressionTests
+public class ClientSideValidationAndErrorMappingTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
 
     // =====================================================================
-    // Block 3: ReadFilters.FromAggregateVersion clamps <1 to 1
+    // ReadFilters.FromAggregateVersion clamps <1 to 1
     // =====================================================================
 
     /// <summary>
@@ -51,7 +49,7 @@ public class AdversarialRegressionTests
     }
 
     // =====================================================================
-    // Block 1: a disposed pool throws ObjectDisposedException (as documented),
+    // a disposed pool throws ObjectDisposedException (as documented),
     // not the ConnectionFailedException it throws when the cluster is down.
     // =====================================================================
 
@@ -71,7 +69,7 @@ public class AdversarialRegressionTests
     }
 
     // =====================================================================
-    // Block 2: a null EventValue is rejected client-side (ArgumentException)
+    // a null EventValue is rejected client-side (ArgumentException)
     // before it can desynchronise the connection.
     // =====================================================================
 
@@ -119,8 +117,8 @@ public class AdversarialRegressionTests
     }
 
     // =====================================================================
-    // Round 2 — Block: RegisterSchema "cannot accept writes" (2027) must be a
-    // not-leader condition so the pool fails over, not a fatal internal error.
+    // RegisterSchema "cannot accept writes" (2027) must be a not-leader
+    // condition so the pool fails over, not a fatal internal error.
     // =====================================================================
 
     [Fact]
@@ -139,14 +137,9 @@ public class AdversarialRegressionTests
     }
 
     // =====================================================================
-    // Round 2 — Block: empty events and a pre-epoch EventTimestamp are rejected
-    // client-side (ArgumentException) instead of an opaque server error / silent
-    // far-future corruption.
+    // malformed events are rejected client-side (ArgumentException) instead of
+    // an opaque server error or silent far-future corruption.
     // =====================================================================
-
-    [Fact]
-    public async Task EmptyEvents_ThrowsArgumentException_BeforeSend()
-        => await AssertWriteRejectedBeforeSend(new SingleAggregateWrite { Events = [] });
 
     [Fact]
     public async Task PreEpochEventTimestamp_ThrowsArgumentException_BeforeSend()

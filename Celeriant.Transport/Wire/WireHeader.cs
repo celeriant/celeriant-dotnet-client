@@ -21,6 +21,8 @@ public readonly struct WireHeader
     public const int Size = 17;
     public const uint ProtocolVersionV2 = 2;
     public const uint ProtocolVersionV3 = 3;
+    public const uint ProtocolVersionV4 = 4;
+    public const uint ProtocolVersionV5 = 5;
 
     public readonly uint Version;             // offset 0
     public readonly uint MessageType;         // offset 4

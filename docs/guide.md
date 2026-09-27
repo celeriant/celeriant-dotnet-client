@@ -50,7 +50,7 @@ For production workloads, `CeleriantPool` is what you want. It manages a set of 
 
   - `PoolUnavailableException`: this client's own pool refused before dialling anything: the node's circuit breaker is open after a recent failed connect, or the pool was disposed. Nothing left your process, so **retrying is always safe**, and it is not evidence that the node is down. It carries `Address` and `Reason`.
   - `ConnectionFailedException` / `ConnectionTimeoutException`: the request never reached a node. Safe to retry; the pool has already tried the other nodes it knows about.
-  - `RequestOutcomeUnknownException`: the request was fully written and no answer came back. The node may or may not have applied it, so the pool **never** sends it to another node, and **you must not blindly retry it**. Either make the write idempotent (a stable `clientId` plus `enforceClientIdempotency`, or `expectedVersion`) and retry, or read the aggregate back and decide.
+  - `RequestOutcomeUnknownException`: the request was fully written and no answer came back. The node may or may not have applied it, so the pool **never** sends it to another node, and **you must not blindly retry it**. Either make the write idempotent (a stable `clientId` plus `enforceClientIdempotency`, or `expectedVersion`) and retry, or read the aggregate back and decide. Reads don't have this problem: a read changes nothing, so the pool sends a read whose reply was lost once more, and a streaming read picks up from the page it lost. You only see this exception on a read if the second attempt is lost too.
 - **Reads** also go to the leader by default. This gives you read-your-writes: a read issued after a successful write sees that write.
 - **Follower reads** are explicit. Set `RouteReadsToFollowers = true` to send reads to followers and keep the leader free for writes. Follower reads are eventually consistent: a lagging follower returns whatever it has, including "aggregate does not exist" for an aggregate you just wrote. Only opt in if your read path tolerates stale data. If every follower is unreachable, reads and watches fall back to the leader rather than failing: a follower outage costs leader load, not availability.
 
@@ -74,13 +74,20 @@ Key pool options:
 | `RequestTimeout` | 30s | Per-request timeout |
 | `IdleTimeout` | 25s | Close idle connections (must be below server's `slow_client_timeout`) |
 | `RouteReadsToFollowers` | false | Keep the leader free for writes |
+| `MaxResponseSize` | 64 MB | Largest data or watch frame the client reads; the Identify reply has its own limit |
 
-Wire compression is automatic and requires no configuration. When the cluster uses dictionary
-compression it ships a zstd dictionary to the client during the Identify handshake (cached and
-shared across pooled connections). The client then compresses large variable-size requests
-(writes, schema registration) with that dictionary and transparently decompresses responses.
-Clusters that don't use dictionary compression: and connections that never identify: send
-everything uncompressed.
+Wire compression is automatic and requires no configuration. The client bundles the built-in zstd
+dictionary, so a cluster on the built-in ships nothing. A cluster with a custom dictionary ships it
+once during the Identify handshake, and the pool caches it and shares it across connections. The
+client then compresses large variable-size requests (writes, schema registration) with the
+negotiated dictionary and transparently decompresses responses. Clusters that don't use dictionary
+compression send everything uncompressed.
+
+`MaxResponseSize` bounds data and watch frames, not the handshake. The reply to Identify is read
+under its own limit, `HandshakeLimits.IdentifyResponseMaxBytes` (2,097,280 bytes, room for the
+largest 1 MiB dictionary), so a small cap still connects to a cluster with a large dictionary. A
+non-Identify reply to Identify, such as an error frame, is held to the smaller of `MaxResponseSize`
+and that limit. Both are checked from the frame header before the body is read.
 
 ### DI registration
 
@@ -129,7 +136,7 @@ The pool accepts TLS config via `CeleriantPoolOptions.TlsConfig`. Watch connecti
 
 ## Client identity
 
-When the server has `require_client_identity` enabled, the first message on a connection must be an Identify request. Three factory methods, all sent via the same Identify message:
+Every connection sends Identify as its first frame, whether or not you configure an identity. Without one the Identify carries no credentials and only negotiates compression. With one it also carries the credentials, which a server with `require_client_identity` or an API keys file demands. Three factory methods, all sent via the same Identify message:
 
 ### API key
 
@@ -181,6 +188,16 @@ await using var pool = new CeleriantPool(new CeleriantPoolOptions
 ```
 
 Access levels are connection-scoped. ReadOnly blocks write/delete/trim/schema operations. The pool handles identity automatically on every new connection it creates.
+
+Identity is fixed when a connection opens. Call `IdentifyAsync` on a fresh `CeleriantClient` before its first request. Once a request has gone out, the connection has already identified without credentials, and `IdentifyAsync` throws `InvalidOperationException`. The pool and `WatchOptions` take an `IdentityConfig` and handle this for you.
+
+A server that rejects the Identify replies with a typed error and closes the connection:
+
+- `IdentityRequiredException` (10004): the server requires a verified client identity and the connection did not present one.
+- `AuthRequiredException` (10005): the server has an API keys file and no API key was presented.
+- `AuthInvalidKeyException` (10006): the API key is unknown, or the server has no API keys configured.
+
+These are configuration errors. Retrying with the same identity gets the same answer.
 
 ## Serialization
 
@@ -319,22 +336,50 @@ try
 }
 catch (WriteOccException ex)
 {
-    // ex.ExpectedVersion: what you passed in
-    // ex.CurrentAggregateVersion: where the aggregate actually is
-    // Re-read, re-validate, retry
+    foreach (var conflict in ex.Conflicts)
+    {
+        Console.WriteLine($"{conflict.Key}: expected {conflict.Expected}, current {conflict.Current}");
+    }
+    // Re-read every affected invariant before explicitly retrying.
+    // ExpectedVersion and CurrentAggregateVersion describe the first sorted conflict.
 }
 ```
 
 There is no automatic retry on OCC failures. That's by design: only your domain logic knows whether a retry is safe. Catch up to the tip of the aggregate event stream, re-validate your business rules, and try again.
 
+### Check a fence without modifying it
+
+Sometimes a write depends on another aggregate you don't want to change. Ship an order only if the customer's account hasn't been frozen since you checked it. `Guard` adds that account to the write as a condition: the whole request fails with `WriteOccException` if the account has moved past `fenceVersion`, and nothing is appended to it if it hasn't.
+
+```csharp
+await pool.WriteAsync(new WriteRequest
+{
+    ClientId = myClientId,
+    Writes = new Dictionary<AggregateKey, SingleAggregateWrite>
+    {
+        [fenceKey] = SingleAggregateWrite.Guard(fenceVersion),
+        [targetKey] = new SingleAggregateWrite
+        {
+            Events = newEvents,
+            ExpectedVersion = targetVersion,
+        },
+    },
+});
+```
+
+- `Guard(0)` means "this aggregate must not exist". It never creates one.
+- The fence and the target must be on the same shard, like any multi-aggregate write (see [Dynamic consistency boundaries](#dynamic-consistency-boundaries)).
+- A guard is checked at the moment the write commits. It is not a lock: the fenced aggregate can change straight afterwards.
+- A write made only of guards returns `MaxAggregateVersion = null`, because nothing moved.
+
 ### Exactly-once writes
 
-Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. Celeriant tracks the highest `ClientSeq` per `(AggregateKey, ClientId)`. If a write is retried due to a timeout and the original already landed, the server rejects the duplicate with an `IdempotencyViolationException` instead of writing it twice.
+Set `EnforceClientIdempotency = true` and provide a `ClientSeq` on each event. Celeriant tracks the highest `ClientSeq` per `(AggregateKey, ClientId)`. If a write is retried after a lost reply and the original already landed, the server rejects the duplicate with an `IdempotencyViolationException` instead of writing it twice.
 
 The retry behaviour depends on why the write failed:
 
 - **OCC failure**: re-derive `ClientSeq` from fresh state (the aggregate moved, your seq assumption was wrong)
-- **Timeout**: hold `ClientSeq` constant (the write may have already landed; changing the seq would bypass the dedup check)
+- **Timeout or `RequestOutcomeUnknownException`**: hold `ClientSeq` constant (the write may have already landed; changing the seq would bypass the dedup check)
 - **Idempotency violation**: the seq landed, durably. With concurrent requests sharing one `ClientId`, it may have been a sibling's write, so verify before claiming success: point-read the contested seq (`ReadFilters` with `MinClientSeq`/`MaxClientSeq` plus `IncludeClientId`) and compare the `EventId`. Yours means the prior attempt landed. A sibling's means your event never landed; re-derive and retry. `Celeriant.Reference` implements the full loop.
 
 ### Dynamic consistency boundaries
@@ -581,13 +626,18 @@ await foreach (var agg in pool.ListAggregatesAsync(options: options))
 
 Compression is automatic, dictionary-based, and requires no configuration.
 
-When the cluster uses dictionary compression, it ships a zstd dictionary to the client during the
-Identify handshake. The pool caches that dictionary and shares it across connections (advertising
-its sha on each new connection so the server can skip resending the bytes). The client then
+The built-in zstd dictionary ships with the client, so a cluster using it never sends dictionary
+bytes. Only a custom dictionary is downloaded, during the Identify handshake. The pool caches it and
+shares it across connections, advertising its sha on each new connection so the server skips
+resending the bytes. Connections that dial at the same moment, before any of them has finished its
+handshake, have nothing cached to advertise, so each downloads the dictionary once. After that the
+pool downloads it no more. The client then
 compresses large variable-size requests: writes and schema registration whose payload is at least
 1&#160;KB: with that dictionary, and transparently decompresses any dictionary-compressed responses.
 
 There is nothing to configure and no per-request compression flag: a connection that has negotiated
-a dictionary compresses eligible requests automatically, and connections that never identify (or
-clusters not using dictionary compression) send everything uncompressed. The only wire compression
+a dictionary compresses eligible requests automatically, and clusters not using dictionary
+compression send everything uncompressed. The Identify reply that carries the dictionary is read
+under `HandshakeLimits.IdentifyResponseMaxBytes`, not `MaxResponseSize` (see
+[The pool](#the-pool)). The only wire compression
 values are `None` and `ZstdDict`.

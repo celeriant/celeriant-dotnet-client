@@ -13,7 +13,7 @@ namespace Celeriant.Client;
 ///
 /// <para>
 /// The wire framing, zstd-dictionary compression, and Identify handshake live in the shared
-/// <see cref="CeleriantConnection"/>; this type adds the V3 (MessagePack) body codec, the typed
+/// <see cref="CeleriantConnection"/>; this type adds the V5 (MessagePack) body codec, the typed
 /// request/response mapping, and the storage exception taxonomy.
 /// </para>
 /// </summary>
@@ -28,8 +28,18 @@ public sealed class CeleriantClient : ICeleriantClient
 
     private readonly CeleriantConnection _conn;
     private bool _disposed;
+    private long _maxResponseSize = DefaultMaxResponseSize;
+    private readonly SemaphoreSlim _identifyLock = new(1, 1);
+    // Advertised in Identify and taught what the server ships. A standalone client owns its own,
+    // seeded with the built-in; a pool connection shares the pool's, so the pool downloads a cluster
+    // dictionary once.
+    private readonly DictCache _dictCache;
 
-    private CeleriantClient(CeleriantConnection conn) => _conn = conn;
+    private CeleriantClient(CeleriantConnection conn, DictCache dictCache)
+    {
+        _conn = conn;
+        _dictCache = dictCache;
+    }
 
     /// <summary>The compression dictionary negotiated for this connection, if any.</summary>
     internal CachedDict? CurrentDict => _conn.CurrentDict;
@@ -66,11 +76,23 @@ public sealed class CeleriantClient : ICeleriantClient
     /// <exception cref="ArgumentException"><paramref name="address"/> is not "host:port", or the port is out of range.</exception>
     /// <exception cref="ConnectionFailedException">The server could not be reached, or the TLS handshake failed.</exception>
     /// <exception cref="ConnectionTimeoutException">The connection did not complete within <paramref name="connectionTimeout"/>.</exception>
-    public static async Task<CeleriantClient> ConnectAsync(
+    public static Task<CeleriantClient> ConnectAsync(
         string address,
         TimeSpan? connectionTimeout = null,
         ClientTlsConfig? tlsConfig = null,
         CancellationToken ct = default)
+        => ConnectWithDictCacheAsync(address, connectionTimeout, tlsConfig, new DictCache(), ct);
+
+    /// <summary>
+    /// Connect sharing <paramref name="dictCache"/> with other connections: every Identify on this
+    /// client advertises a snapshot of it and teaches it the dictionary the server confirms.
+    /// </summary>
+    internal static async Task<CeleriantClient> ConnectWithDictCacheAsync(
+        string address,
+        TimeSpan? connectionTimeout,
+        ClientTlsConfig? tlsConfig,
+        DictCache dictCache,
+        CancellationToken ct)
     {
         var conn = await CeleriantConnection.ConnectAsync(
             address,
@@ -83,7 +105,7 @@ public sealed class CeleriantClient : ICeleriantClient
         conn.WithMaxRequestSize(DefaultMaxRequestSize)
             .WithMaxResponseSize(DefaultMaxResponseSize);
 
-        return new CeleriantClient(conn);
+        return new CeleriantClient(conn, dictCache);
     }
 
     // -------------------------------------------------------------------------
@@ -100,10 +122,12 @@ public sealed class CeleriantClient : ICeleriantClient
 
     /// <summary>Set the maximum allowed response payload size in bytes. Default is 64 MB. Bounds a
     /// single wire page; a response page exceeding it throws <see cref="ProtocolException"/>, so keep
-    /// it at or above the server's response page size. Mutates this client and returns it for
+    /// it at or above the server's response page size. The reply to Identify is read under
+    /// <see cref="HandshakeLimits"/> instead. Mutates this client and returns it for
     /// chaining; it is not a copy.</summary>
     public CeleriantClient WithMaxResponseSize(long maxResponseSize)
     {
+        _maxResponseSize = maxResponseSize;
         _conn.WithMaxResponseSize(maxResponseSize);
         return this;
     }
@@ -124,29 +148,52 @@ public sealed class CeleriantClient : ICeleriantClient
     /// Perform the Identify handshake with the server. Returns the <see cref="Guid"/> client ID
     /// assigned by the server, or null if the server did not include one.
     /// </summary>
-    public Task<Guid?> IdentifyAsync(ClientIdentityConfig identityConfig, CancellationToken ct = default)
-        => IdentifyAsync(identityConfig, knownDictSha: null, dictLookup: null, ct);
-
-    /// <summary>
-    /// Perform the Identify handshake, advertising a previously cached compression-dictionary sha
-    /// so the server can skip re-sending the bytes when they match.
-    /// </summary>
-    internal Task<Guid?> IdentifyAsync(
-        ClientIdentityConfig identityConfig,
-        string? knownDictSha,
-        Func<string, byte[]?>? dictLookup,
-        CancellationToken ct = default)
+    /// <exception cref="IdentityRequiredException">The server requires a verified key pair (10004).</exception>
+    /// <exception cref="AuthRequiredException">The server requires an API key and none was configured (10005).</exception>
+    /// <exception cref="AuthInvalidKeyException">The server rejected the configured API key (10006).</exception>
+    /// <exception cref="ProtocolException">The server answered Identify with a protocol error, or confirmed a dictionary this client cannot resolve.</exception>
+    /// <exception cref="InvalidOperationException">This connection has already identified, explicitly or implicitly ahead of its first request. Nothing is sent and the client stays usable.</exception>
+    public async Task<Guid?> IdentifyAsync(ClientIdentityConfig identityConfig, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        // The advertised sha is filled in from the cache snapshot at send time.
         var identity = IdentifyParams.ForCredentials(
             identityConfig.ResolveApiKeyBase64(),
             identityConfig.PublicKeyBase64,
             identityConfig.PrivateKeyBase64,
-            knownDictSha,
+            knownDictSha: null,
             allowAnonymous: false);
 
-        return _conn.IdentifyAsync(identity, knownDictSha, dictLookup, ct);
+        await _identifyLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // The server accepts Identify only as a connection's first frame and drops the
+            // connection on a second one. Checked under the lock so a first request that won the
+            // race to identify implicitly is seen here too.
+            if (_conn.IsIdentified)
+                throw new InvalidOperationException(
+                    "This connection has already identified; Identify is only valid as a connection's "
+                    + "first frame. Pass the identity when connecting (IdentifyAsync before the first "
+                    + "request, or CeleriantPoolOptions.IdentityConfig / WatchOptions.IdentityConfig).");
+            return await IdentifyLockedAsync(identity, ct).ConfigureAwait(false);
+        }
+        finally { _identifyLock.Release(); }
+    }
+
+    /// <summary>
+    /// Snapshot the dictionary cache, identify advertising that snapshot, then learn what the server
+    /// confirmed. The snapshot is taken before the write so a sha-only confirm resolves against what
+    /// this connection advertised, even if another connection sharing the cache learns a different
+    /// dictionary meanwhile. Caller holds <see cref="_identifyLock"/>.
+    /// </summary>
+    private async Task<Guid?> IdentifyLockedAsync(IdentifyParams identity, CancellationToken ct)
+    {
+        CachedDict advertised = _dictCache.Snapshot();
+        Guid? clientId = await _conn.IdentifyAsync(identity, advertised, ct).ConfigureAwait(false);
+        if (_conn.CurrentDict is { } learned)
+            _dictCache.Learn(learned);
+        return clientId;
     }
 
     // -------------------------------------------------------------------------
@@ -294,14 +341,13 @@ public sealed class CeleriantClient : ICeleriantClient
             request = WithCorrelationId(request, sent.Value);
         }
 
+        ValidateConflictCapacity(request);
         (uint messageTypeId, byte[] serialized, bool isVariableSize) = SerializeRequest(request);
+        await EnsureIdentifiedAsync(ct).ConfigureAwait(false);
         RawFrame frame = await _conn.SendAsync(messageTypeId, serialized, isVariableSize, PayloadBytes(request), ct)
             .ConfigureAwait(false);
 
-        ClientResponse response = DecodeFrame(frame.MessageType, frame.Body);
-        VerifyCorrelation(response, sent);
-        VerifyResponseType(messageTypeId, frame.MessageType);
-        return ThrowIfError(response);
+        return InterpretFrame(frame, messageTypeId, sent);
     }
 
     /// <summary>
@@ -348,13 +394,12 @@ public sealed class CeleriantClient : ICeleriantClient
             request = WithCorrelationId(request, sent.Value);
         }
 
+        ValidateConflictCapacity(request);
         (uint messageTypeId, byte[] serialized, bool isVariableSize) = SerializeRequest(request);
+        EnsureIdentifiedAsync(CancellationToken.None).GetAwaiter().GetResult();
         RawFrame frame = _conn.SendRequest(messageTypeId, serialized, isVariableSize, PayloadBytes(request));
 
-        ClientResponse response = DecodeFrame(frame.MessageType, frame.Body);
-        VerifyCorrelation(response, sent);
-        VerifyResponseType(messageTypeId, frame.MessageType);
-        return ThrowIfError(response);
+        return InterpretFrame(frame, messageTypeId, sent);
     }
 
     /// <summary>
@@ -366,7 +411,12 @@ public sealed class CeleriantClient : ICeleriantClient
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         RawFrame frame = await _conn.ReadFrameAsync(ct).ConfigureAwait(false);
-        return DeserializeResponse(frame.MessageType, frame.Body);
+        try { return DeserializeResponse(frame.MessageType, frame.Body); }
+        catch (ProtocolException)
+        {
+            _conn.PoisonForCorrelationMismatch();
+            throw;
+        }
     }
 
     public ValueTask DisposeAsync()
@@ -415,9 +465,9 @@ public sealed class CeleriantClient : ICeleriantClient
 
             // An events-less write is a no-op the server rejects with an opaque error; catch it here
             // with the same client-side clarity as the checks below.
-            if (events.Length == 0)
+            if (events.Length == 0 && (write.ExpectedVersion is null || write.AllowCreate || write.EnforceClientIdempotency))
                 throw new ArgumentException(
-                    $"The write for aggregate {key} has no events; include at least one.", nameof(request));
+                    $"An empty write for {key} must pin a version and disable creation and idempotency.", nameof(request));
 
             // A version cannot be negative; a negative ExpectedVersion would cast to a huge u64 and come
             // back as a WriteOccException naming an absurd version. Reject it with an honest message.
@@ -561,6 +611,63 @@ public sealed class CeleriantClient : ICeleriantClient
         _ => null,
     };
 
+    private async Task EnsureIdentifiedAsync(CancellationToken ct)
+    {
+        if (_conn.IsIdentified) return;
+        await _identifyLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!_conn.IsIdentified)
+                await IdentifyLockedAsync(new IdentifyParams(), ct).ConfigureAwait(false);
+        }
+        finally { _identifyLock.Release(); }
+    }
+
+    private void ValidateConflictCapacity(ClientRequest request)
+    {
+        long? pinned = request switch
+        {
+            ClientRequest.Write w => w.Value.Writes.Values.LongCount(x => x.ExpectedVersion.HasValue),
+            ClientRequest.Delete d => d.Value.Deletes.Values.LongCount(x => x.ExpectedVersion.HasValue),
+            _ => null,
+        };
+        if (pinned is { } count && checked(25L + 74L * count) > _maxResponseSize)
+            throw new ArgumentException("MaxResponseSize cannot hold the complete conflict response for every version pin.");
+    }
+
+    private ClientResponse InterpretFrame(RawFrame frame, uint requestType, Guid? sent)
+    {
+        try
+        {
+            if (frame.MessageType is MessageTypes.Responses.WriteConflict or MessageTypes.Responses.DeleteConflict)
+            {
+                bool write = frame.MessageType == MessageTypes.Responses.WriteConflict;
+                if (requestType != (write ? MessageTypes.Requests.Write : MessageTypes.Requests.Delete))
+                    throw new ProtocolException("Conflict response does not match the request operation.");
+                var (correlation, conflicts) = ConflictCodec.Decode(frame.Body);
+                if (correlation != sent) throw new ProtocolException("Conflict correlation id mismatch.");
+                var error = new ErrorResponse
+                {
+                    CorrelationId = correlation,
+                    ErrorCode = write ? ErrorResponse.WriteOptimisticConcurrencyViolation : ErrorResponse.DeleteOptimisticConcurrencyViolation,
+                    ErrorMessage = "Optimistic concurrency conflict.",
+                };
+                throw write ? new WriteOccException(error, conflicts) : new DeleteOccException(error, conflicts);
+            }
+            ClientResponse response = DecodeFrame(frame.MessageType, frame.Body);
+            VerifyCorrelation(response, sent);
+            VerifyResponseType(requestType, frame.MessageType);
+            return ThrowIfError(response);
+        }
+        catch (CeleriantErrorException) { throw; }
+        catch (CeleriantClientException ex) when (ex is not ProtocolException) { throw; }
+        catch (Exception ex)
+        {
+            _conn.PoisonForCorrelationMismatch();
+            throw ex is ProtocolException ? ex : new ProtocolException("Malformed response body.", ex);
+        }
+    }
+
     private static bool CarriesCorrelationId(ClientResponse response)
         => response is not (ClientResponse.Watch or ClientResponse.ProtocolError);
 
@@ -666,6 +773,8 @@ public sealed class CeleriantClient : ICeleriantClient
     /// </summary>
     internal static Exception CreateException(ErrorResponse error)
     {
+        if (error.ErrorCode is ErrorResponse.WriteOptimisticConcurrencyViolation or ErrorResponse.DeleteOptimisticConcurrencyViolation)
+            return new ProtocolException("Legacy JSON OCC responses are invalid in protocol V5.");
         if (error.IsNotLeader)
             return new NotLeaderException(error, error.ParseLeaderAddress());
         if (error.IsIdentityRequired)

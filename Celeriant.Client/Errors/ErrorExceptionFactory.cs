@@ -37,6 +37,8 @@ internal static class ErrorExceptionFactory
             ErrorResponse.WriteAggregateRecreateNotAllowed
                 => new AggregateRecreateNotAllowedException(error),
             // Prior write fsynced but not yet durable: retriable (hold client seq, retry).
+            ErrorResponse.WriteInvalidGuard or ErrorResponse.WriteConflictResponseTooLarge
+                => new WriteErrorException(error),
             ErrorResponse.WriteInflightDuplicate
                 => new InflightDuplicateWriteException(error),
             >= ErrorResponse.WriteEmptyEventsList and <= ErrorResponse.WriteAggregateRecreateNotAllowed
@@ -83,7 +85,7 @@ internal static class ErrorExceptionFactory
                 => new DeleteOccException(error),
             ErrorResponse.DeleteAggregateNotExists
                 => new AggregateNotFoundException(error),
-            ErrorResponse.DeleteEmptyDeleteList
+            ErrorResponse.DeleteEmptyDeleteList or ErrorResponse.DeleteConflictResponseTooLarge
                 => new DeleteErrorException(error),
             ErrorResponse.DeleteCacheError
                 or ErrorResponse.DeleteReplicationError
@@ -138,8 +140,10 @@ internal static class ErrorExceptionFactory
             ErrorResponse.IdentifyRequired
                 => new CeleriantErrorException(error),
             ErrorResponse.AuthRequired
-                or ErrorResponse.AuthInvalidKey
-                or ErrorResponse.AuthInsufficientPermissions
+                => new AuthRequiredException(error),
+            ErrorResponse.AuthInvalidKey
+                => new AuthInvalidKeyException(error),
+            ErrorResponse.AuthInsufficientPermissions
                 => new AuthErrorException(error),
 
             // Unknown error codes

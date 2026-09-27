@@ -19,7 +19,7 @@ namespace Celeriant.Client.Tests;
 /// plumbing instead of the failure.</item>
 /// </list>
 /// </summary>
-public class WatchFailClosedImplementationTests
+public class WatchFailureReasonTests
 {
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);
 

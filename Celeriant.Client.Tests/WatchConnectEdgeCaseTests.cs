@@ -8,11 +8,11 @@ using Celeriant.Client.Watch;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Adversarial probes against the connect-time parity work. Each one hunts for a path where a
-/// caller ends up holding a <see cref="WatchConnection"/> that is not watching what it believes it
-/// is watching, or where connecting neither succeeds nor fails.
+/// Connect-time edge cases. Each one is a path where a caller could end up holding a
+/// <see cref="WatchConnection"/> that is not watching what it believes it is watching, or where
+/// connecting neither succeeds nor fails.
 /// </summary>
-public class WatchConnectParityAdversarialTests
+public class WatchConnectEdgeCaseTests
 {
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);
 
@@ -20,7 +20,7 @@ public class WatchConnectParityAdversarialTests
         FakeServerSession.BuildFrame(MessageTypes.Responses.Watch, WireCodec.Serialize(new WatchResponse()));
 
     // ---------------------------------------------------------------------
-    // A1: the single-shard twin of the multi-shard wrong-response-type guard
+    // the single-shard twin of the multi-shard wrong-response-type guard
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -70,7 +70,7 @@ public class WatchConnectParityAdversarialTests
     }
 
     // ---------------------------------------------------------------------
-    // A2: nothing bounds the subscription round trip
+    // nothing bounds the subscription round trip
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -123,7 +123,7 @@ public class WatchConnectParityAdversarialTests
     }
 
     // ---------------------------------------------------------------------
-    // A3: the checked cast bounds nothing a real server can send
+    // the checked cast bounds nothing a real server can send
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -180,7 +180,7 @@ public class WatchConnectParityAdversarialTests
     }
 
     // ---------------------------------------------------------------------
-    // A4: only one end of the range is validated
+    // only one end of the range is validated
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -215,7 +215,7 @@ public class WatchConnectParityAdversarialTests
     }
 
     // ---------------------------------------------------------------------
-    // A5: the exception type the range guard raises
+    // the exception type the range guard raises
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -273,7 +273,7 @@ public class WatchConnectParityAdversarialTests
         => failure?.GetType().Name ?? "no exception";
 
     // ---------------------------------------------------------------------
-    // A6: leak probes that should come back clean
+    // resource leaks on a failed or cancelled connect
     // ---------------------------------------------------------------------
 
     /// <summary>

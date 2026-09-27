@@ -72,7 +72,8 @@ public sealed class CeleriantPoolOptionsBuilder
     /// <summary>Maximum request payload size in bytes. Default: 10 MB.</summary>
     public long MaxRequestSize { get; set; } = 10_000_000;
 
-    /// <summary>Maximum response payload size in bytes. Default: 64 MB.</summary>
+    /// <summary>Maximum response payload size in bytes. Default: 64 MB. Does not bound the reply to
+    /// Identify, which is read under <see cref="Celeriant.Transport.HandshakeLimits"/>.</summary>
     public long MaxResponseSize { get; set; } = 64 * 1024 * 1024;
 
     /// <summary>Idle connection timeout. Must be shorter than the server's slow_client_timeout. Default: 25 seconds.</summary>

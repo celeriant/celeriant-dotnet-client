@@ -8,39 +8,38 @@ namespace Celeriant.Client.Tests;
 
 /// <summary>
 /// Dictionary negotiation (invariants.md "Wire Format", docs/reference/wire-protocol.md): when the
-/// client advertises a dictionary sha during Identify and the server confirms it without resending
-/// the bytes, the client must resolve them from its cache. A miss must fail Identify and poison the
-/// connection, not proceed with no dictionary and die on the first ZstdDict response.
+/// server confirms a dictionary sha during Identify without resending the bytes, the client must
+/// resolve them from what it advertised or the built-in. A sha that is neither must fail Identify and
+/// poison the connection, not proceed with no dictionary and die on the first ZstdDict response.
 /// </summary>
-public class DictShaMissIdentifyOracleTests
+public class DictShaMissIdentifyTests
 {
     private const string ShaUnderTest = "sha-under-test";
 
     [Fact]
-    public async Task ShaOnlyConfirm_WithDictLookupMiss_MustNotSilentlyProceedToLateZstdDictFailure()
+    public async Task ShaOnlyConfirm_OfAShaNotAdvertised_MustNotSilentlyProceedToLateZstdDictFailure()
     {
         // The fake server: confirm Identify with a sha-only response, then answer the first
         // data request with a ZstdDict-compressed frame (compression type 1).
-        await using var server = FakeCeleriantServer.Start(async (session, messageType, _) =>
+        await using var server = FakeCeleriantServer.Start(async (session, messageType, body) =>
         {
             if (messageType == MessageTypes.Requests.Identify)
             {
-                await session.SendFrameAsync(MessageTypes.Responses.Identify, BuildShaOnlyIdentifyBody());
+                await session.SendFrameAsync(MessageTypes.Responses.Identify, BuildShaOnlyIdentifyBody(WireCodec.Deserialize<IdentifyRequest>(body).CorrelationId));
                 return;
             }
 
             await session.SendRawAsync(BuildZstdDictFrame(MessageTypes.Responses.AggregateDetails));
         });
 
-        await using var client = await CeleriantClient.ConnectAsync(
-            server.Address, connectionTimeout: TimeSpan.FromSeconds(5));
+        // Advertise a dictionary other than the one the server confirms, so resolution misses.
+        var cache = new DictCache();
+        cache.Learn(new CachedDict("some-other-sha", [1, 2, 3]));
+        await using var client = await CeleriantClient.ConnectWithDictCacheAsync(
+            server.Address, TimeSpan.FromSeconds(5), tlsConfig: null, cache, CancellationToken.None);
 
-        // Advertise a known sha, but the cache lookup misses (returns null).
         Exception? identifyFailure = await Record.ExceptionAsync(() =>
-            client.IdentifyAsync(
-                ClientIdentityConfig.FromClientId(Guid.NewGuid()),
-                knownDictSha: ShaUnderTest,
-                dictLookup: _ => null));
+            client.IdentifyAsync(ClientIdentityConfig.FromClientId(Guid.NewGuid())));
 
         // Then drive a data request so the server's ZstdDict-compressed reply is read.
         Exception? requestFailure = await Record.ExceptionAsync(() =>
@@ -54,17 +53,18 @@ public class DictShaMissIdentifyOracleTests
             + $"first compressed response threw {Describe(requestFailure)}. "
             + "The client must instead fail cleanly at Identify time.");
 
+        Assert.Contains("no matching dictionary", Assert.IsType<Celeriant.Client.Errors.ProtocolException>(identifyFailure).Message);
         Assert.True(client.IsPoisoned, "Identify failed but did not poison the connection.");
     }
 
     [Fact]
-    public async Task ShaOnlyConfirm_WithNullDictLookup_MustPoisonAtIdentifyTime()
+    public async Task ShaOnlyConfirm_OfAShaNeitherAdvertisedNorBuiltin_MustPoisonAtIdentifyTime()
     {
-        await using var server = FakeCeleriantServer.Start(async (session, messageType, _) =>
+        await using var server = FakeCeleriantServer.Start(async (session, messageType, body) =>
         {
             if (messageType == MessageTypes.Requests.Identify)
             {
-                await session.SendFrameAsync(MessageTypes.Responses.Identify, BuildShaOnlyIdentifyBody());
+                await session.SendFrameAsync(MessageTypes.Responses.Identify, BuildShaOnlyIdentifyBody(WireCodec.Deserialize<IdentifyRequest>(body).CorrelationId));
                 return;
             }
 
@@ -75,15 +75,13 @@ public class DictShaMissIdentifyOracleTests
             server.Address, connectionTimeout: TimeSpan.FromSeconds(5));
 
         Exception? identifyFailure = await Record.ExceptionAsync(() =>
-            client.IdentifyAsync(
-                ClientIdentityConfig.FromClientId(Guid.NewGuid()),
-                knownDictSha: ShaUnderTest,
-                dictLookup: null));
+            client.IdentifyAsync(ClientIdentityConfig.FromClientId(Guid.NewGuid())));
 
         Assert.True(
             identifyFailure is not null,
-            "Identify accepted a sha-only dictionary confirmation with no dictLookup. "
+            "Identify accepted a sha-only confirmation of a dictionary the client never advertised. "
             + "The client must fail cleanly at Identify time.");
+        Assert.Contains("no matching dictionary", Assert.IsType<Celeriant.Client.Errors.ProtocolException>(identifyFailure).Message);
         Assert.True(client.IsPoisoned, "Identify failed but did not poison the connection.");
     }
 
@@ -91,12 +89,12 @@ public class DictShaMissIdentifyOracleTests
     /// A five-element msgpack array in the server's <c>IdentifyResponse</c> field order, with the
     /// dictionary sha present and the bytes absent (sha-only confirmation).
     /// </summary>
-    private static byte[] BuildShaOnlyIdentifyBody()
+    private static byte[] BuildShaOnlyIdentifyBody(Guid? correlation)
     {
         var buffer = new ArrayBufferWriter<byte>();
         var writer = new MessagePackWriter(buffer);
         writer.WriteArrayHeader(5);
-        writer.WriteNil();               // correlation_id
+        CeleriantNullableGuidFormatter.Instance.Serialize(ref writer, correlation, WireCodec.Options);
         writer.WriteNil();               // client_id
         writer.WriteNil();               // access_level
         writer.Write(ShaUnderTest);      // compression_dict_sha256
@@ -112,7 +110,7 @@ public class DictShaMissIdentifyOracleTests
         var frame = new byte[WireHeader.Size + body.Length];
         WireHeader
             .ForCompressedRequest(
-                WireHeader.ProtocolVersionV3, messageType, (uint)body.Length, (uint)body.Length,
+                WireHeader.ProtocolVersionV5, messageType, (uint)body.Length, (uint)body.Length,
                 CompressionType.ZstdDict)
             .WriteTo(frame);
         body.CopyTo(frame, WireHeader.Size);

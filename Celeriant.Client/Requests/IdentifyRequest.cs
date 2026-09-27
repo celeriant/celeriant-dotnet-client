@@ -28,9 +28,9 @@ public sealed record IdentifyRequest
     public string? ApiKey { get; init; }
 
     /// <summary>
-    /// SHA-256 hex of the compression dictionary the client already has cached, if any.
-    /// When it matches the cluster's current dictionary, the server returns the sha only
-    /// (no bytes), avoiding a redundant ~14&#160;KiB transfer. Null on the first connection.
+    /// SHA-256 hex of the compression dictionary the client advertises: the pool's last learned
+    /// dictionary, or the bundled built-in on a fresh pool or a standalone client. When it matches
+    /// the cluster's current dictionary, the server returns the sha only (no bytes).
     /// </summary>
     [Key(5)]
     public string? KnownDictSha256 { get; init; }

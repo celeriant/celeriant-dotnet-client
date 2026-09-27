@@ -67,6 +67,25 @@ public class CorrelationIdTests
     }
 
     /// <summary>
+    /// The same binding holds for the implicit Identify: an error that does not echo it is a
+    /// protocol failure that poisons the connection before any mutation is sent.
+    /// </summary>
+    [Fact]
+    public async Task IdentifyErrorForAnotherRequest_IsAProtocolError_AndNothingIsSent()
+    {
+        await using var server = new RecordingFrameServer(_ => Task.FromResult(new FrameReply(
+            MessageTypes.Responses.GenericError,
+            FakeServerProtocol.ErrorFrame(ErrorResponse.AuthInvalidKey, "Invalid API key.", Guid.Empty))));
+        await using var client = await CeleriantClient.ConnectAsync(server.Address);
+
+        var failure = await Record.ExceptionAsync(() => client.WriteAsync(OccTestData.Write()));
+
+        Assert.IsType<ProtocolException>(failure);
+        Assert.True(client.IsPoisoned);
+        Assert.DoesNotContain(server.Frames, frame => frame.Type is 3 or 5);
+    }
+
+    /// <summary>
     /// Detecting a mismatch and then handing the same connection back is worse than not detecting
     /// it, because the stream stays offset and every later borrower inherits the offset.
     /// </summary>

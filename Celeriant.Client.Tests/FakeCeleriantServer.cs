@@ -1,3 +1,6 @@
+using Celeriant.Client.Protocol;
+using Celeriant.Client.Requests;
+using Celeriant.Client.Responses;
 using System.Net;
 using System.Net.Sockets;
 using Celeriant.Transport;
@@ -103,6 +106,18 @@ internal sealed class FakeCeleriantServer : IAsyncDisposable
                     var parsed = WireHeader.ParseFrom(header);
                     var body = new byte[parsed.CompressedLength];
                     await ReadExactAsync(stream, body, body.Length, _cts.Token);
+                    if (parsed.MessageType == MessageTypes.Requests.Identify)
+                    {
+                        var identify = WireCodec.Deserialize<IdentifyRequest>(body);
+                        // Unsigned V5 opening is shared setup; credential/dictionary handlers still
+                        // see their explicit Identify exchanges.
+                        if (identify.PublicKey is null && identify.ApiKey is null)
+                        {
+                            await session.SendFrameAsync(MessageTypes.Responses.Identify,
+                                WireCodec.Serialize(new IdentifyResponse { CorrelationId = identify.CorrelationId }));
+                            continue;
+                        }
+                    }
                     await _handler(session, parsed.MessageType, body);
                 }
             }
@@ -157,7 +172,7 @@ internal sealed class FakeServerSession(int connectionId, Stream stream)
     {
         var frame = new byte[WireHeader.Size + body.Length];
         WireHeader
-            .ForRequest(WireHeader.ProtocolVersionV3, messageType, (uint)body.Length)
+            .ForRequest(WireHeader.ProtocolVersionV5, messageType, (uint)body.Length)
             .WriteTo(frame);
         body.CopyTo(frame, WireHeader.Size);
         return frame;

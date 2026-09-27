@@ -33,6 +33,8 @@ public sealed class ErrorResponse
     public const uint WriteReplicationBackpressure = 2012;
     /// <summary>Write is fsynced but replication is not yet confirmed: duplicate of an in-flight write. Hold the client seq and retry.</summary>
     public const uint WriteInflightDuplicate = 2013;
+    public const uint WriteInvalidGuard = 2014;
+    public const uint WriteConflictResponseTooLarge = 2015;
 
     // --- Schema errors: 2020-2029 ---
     public const uint RegisterSchemaAlreadyExists = 2020;
@@ -60,6 +62,7 @@ public sealed class ErrorResponse
     public const uint DeleteAggregateNotExists = 4000;
     public const uint DeleteEmptyDeleteList = 4001;
     public const uint DeleteOptimisticConcurrencyViolation = 4002;
+    public const uint DeleteConflictResponseTooLarge = 4008;
     public const uint DeleteCacheError = 4003;
     public const uint DeleteReplicationError = 4004;
     public const uint DeleteFsyncError = 4005;

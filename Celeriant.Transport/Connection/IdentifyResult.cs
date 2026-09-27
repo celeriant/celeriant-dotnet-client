@@ -9,4 +9,5 @@ public readonly record struct IdentifyResult(
     Guid? ClientId,
     byte? AccessLevel,
     string? DictSha,
-    byte[]? DictBytes);
+    byte[]? DictBytes,
+    Guid? CorrelationId = null);

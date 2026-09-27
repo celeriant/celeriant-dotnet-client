@@ -29,10 +29,15 @@ public static class ReadExtensions
         AggregateKey key,
         ReadFilters? filters = null,
         CancellationToken ct = default)
-        => ReadAllAsyncCore(client, key, filters ?? ReadFilters.From(1), ct);
+        => PaginateAsync(client.ReadAsync, key, filters ?? ReadFilters.From(1), ct);
 
-    private static async IAsyncEnumerable<AggregateEventBatch> ReadAllAsyncCore(
-        CeleriantClient client,
+    /// <summary>
+    /// Follow pagination cursors, fetching each page with <paramref name="readPage"/>. A page's
+    /// batches are yielded only after its whole response has arrived, so re-fetching a lost page
+    /// from the same cursor neither repeats nor skips a batch.
+    /// </summary>
+    internal static async IAsyncEnumerable<AggregateEventBatch> PaginateAsync(
+        Func<ReadRequest, CancellationToken, Task<ReadResponse>> readPage,
         AggregateKey key,
         ReadFilters filters,
         [EnumeratorCancellation] CancellationToken ct)
@@ -47,7 +52,7 @@ public static class ReadExtensions
                 ? filters
                 : filters with { FromAggregateVersion = nextIndex.Value };
 
-            var response = await client.ReadAsync(new ReadRequest
+            var response = await readPage(new ReadRequest
             {
                 AggregateKey = key,
                 Filters = currentFilters,

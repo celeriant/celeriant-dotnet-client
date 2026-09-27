@@ -302,11 +302,11 @@ public sealed class MemAccountService : IAccountService
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException)
+            catch (Exception ex) when (ex is CeleriantTimeoutException or RequestOutcomeUnknownException)
             {
-                // Timeout is ambiguous; hold clientSeq constant so an
+                // The write may have landed; hold clientSeq constant so an
                 // IdempotencyViolation catches the landed write.
-                _logger.LogWarning("Timeout on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
+                _logger.LogWarning("Unknown outcome on deposit for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
             }
             catch (InflightDuplicateWriteException)
@@ -401,9 +401,9 @@ public sealed class MemAccountService : IAccountService
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException)
+            catch (Exception ex) when (ex is CeleriantTimeoutException or RequestOutcomeUnknownException)
             {
-                _logger.LogWarning("Timeout on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
+                _logger.LogWarning("Unknown outcome on withdraw for {AccountId}, attempt {Attempt}", accountId, attempt);
                 continue;
             }
             catch (InflightDuplicateWriteException)
@@ -533,9 +533,9 @@ public sealed class MemAccountService : IAccountService
                 reDeriveCei = true;
                 continue;
             }
-            catch (CeleriantTimeoutException)
+            catch (Exception ex) when (ex is CeleriantTimeoutException or RequestOutcomeUnknownException)
             {
-                _logger.LogWarning("Timeout on transfer {From}->{To}, attempt {Attempt}",
+                _logger.LogWarning("Unknown outcome on transfer {From}->{To}, attempt {Attempt}",
                     fromAccountId, toAccountId, attempt);
                 continue;
             }

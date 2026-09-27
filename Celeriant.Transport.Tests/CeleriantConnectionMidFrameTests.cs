@@ -63,7 +63,7 @@ public class CeleriantConnectionMidFrameTests
             await WriteAsync(stream, Frame(IdentifyResponse, []));
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             Assert.False(conn.IsMidFrame);
         });
     }
@@ -101,7 +101,7 @@ public class CeleriantConnectionMidFrameTests
             await WriteAsync(stream, CompressedFrame(DataResponse, comp, (uint)plain.Length));
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             var f = await conn.SendAsync(DataRequest, [1], false, 0);
             Assert.Equal(plain, f.Body);
             Assert.False(conn.IsMidFrame);
@@ -123,7 +123,7 @@ public class CeleriantConnectionMidFrameTests
             await WriteAsync(stream, CompressedFrame(DataResponse, [0xDE, 0xAD, 0xBE, 0xEF], 32));
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             await Record.ExceptionAsync(() => conn.SendAsync(DataRequest, [1], false, 0));
             Assert.False(conn.IsMidFrame);
         });

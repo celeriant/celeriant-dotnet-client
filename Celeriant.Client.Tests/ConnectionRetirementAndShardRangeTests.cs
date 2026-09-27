@@ -45,70 +45,18 @@ public class ConnectionRetirementAndShardRangeTests
     // =====================================================================
 
     /// <summary>
-    /// The case the rule exists for. A <c>WriteOccException</c> is decoded from a complete error
-    /// frame: the request went out, the reply came back whole, the stream is at a frame boundary.
-    /// Retiring on it costs a TCP dial (plus Identify, plus dictionary negotiation) per OCC retry,
-    /// which is exactly the loop where retries are expected rather than exceptional.
-    ///
-    /// <para>
-    /// The pool is capped at one connection, so "the same connection was used" and "the server
-    /// accepted one socket" are the same statement; the recorded connection ids say it a second
-    /// way, in case the cap is ever what is broken.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public async Task OccError_LeavesTheStreamClean_SoEveryRetryReusesOneConnection()
-    {
-        const int attempts = 4;
-        var servedOn = new ConcurrentQueue<int>();
-
-        await using var server = FakeCeleriantServer.Start((session, _, _) =>
-        {
-            servedOn.Enqueue(session.ConnectionId);
-            return session.SendFrameAsync(
-                MessageTypes.Responses.GenericError,
-                FakeServerProtocol.ErrorFrame(
-                    ErrorResponse.WriteOptimisticConcurrencyViolation,
-                    "{\"expected_version\":1,\"current_aggregate_version\":7}",
-                    FixedCorrelationId));
-        });
-
-        await using var pool = SingleConnectionNodePool(server);
-
-        for (int attempt = 0; attempt < attempts; attempt++)
-        {
-            var failure = await FailureWithinBudgetAsync(
-                () => pool.ExecuteRequestAsync(OccWrite(), CancellationToken.None),
-                $"OCC retry {attempt + 1}");
-
-            var occ = Assert.IsType<WriteOccException>(failure);
-            Assert.Equal(7, occ.CurrentAggregateVersion);
-        }
-
-        Assert.Equal(attempts, servedOn.Count);
-        Assert.True(
-            server.ConnectionsAccepted == 1,
-            $"{attempts} OCC-rejected writes opened {server.ConnectionsAccepted} TCP connections. An "
-            + "OCC error is a fully decoded response frame, so the stream is clean and the connection "
-            + "must be kept: retiring it re-dials (and re-identifies) once per retry attempt");
-        Assert.True(
-            servedOn.Distinct().Count() == 1,
-            $"the retries were served on connections [{string.Join(", ", servedOn)}]: the pool handed "
-            + "back a different physical connection instead of reusing the healthy one");
-    }
-
-    /// <summary>
-    /// The contrast. A reply carrying another request's correlation id means this stream is a reply
-    /// behind: <c>CeleriantClient.VerifyCorrelation</c> raises a <see cref="ProtocolException"/>,
-    /// which <c>LeavesConnectionDirty</c> keeps in the retire set. The next request must not be
-    /// served on that socket.
+    /// The contrast to an OCC conflict, which keeps its connection
+    /// (<see cref="GuardedWriteConflictTests"/>). A reply carrying another request's correlation id
+    /// means this stream is a reply behind: <c>CeleriantClient.VerifyCorrelation</c> raises a
+    /// <see cref="ProtocolException"/>, which <c>LeavesConnectionDirty</c> keeps in the retire set.
+    /// The next request must not be served on that socket.
     ///
     /// <para>
     /// Note on what this can and cannot prove: the transport also poisons the connection on this
     /// path, and <c>ConnectionPool.ReturnConnectionAsync</c> discards a poisoned connection on its
     /// own. So the new socket is over-determined and this test cannot isolate the
     /// <c>MarkBroken</c> call — every dirty-stream error in the client also poisons. What it does
-    /// pin is the half of the rule that the OCC test above cannot: narrowing the retire set must
+    /// pin is the half of the rule that the OCC test cannot: narrowing the retire set must
     /// not have let a genuinely desynchronised connection back into the pool.
     /// </para>
     /// </summary>
@@ -190,9 +138,9 @@ public class ConnectionRetirementAndShardRangeTests
     // Already covered elsewhere, and deliberately not repeated here:
     //   * caller MaxShardHint past the 1024 MaxShards bound -> ArgumentOutOfRangeException with
     //     ParamName MaxShardHint and zero sockets opened, in
-    //     WatchAddressParityAdversarialTests.MultiShard_AShardCountPastTheClientBound_OpensNoSocketsAtAll.
+    //     WatchAddressEdgeCaseTests.MultiShard_AShardCountPastTheClientBound_OpensNoSocketsAtAll.
     //   * caller MaxShardHint below StartShard (the inverted range) -> ArgumentOutOfRangeException,
-    //     in WatchConnectParityAdversarialTests.RejectedRange_IsAnArgumentErrorFromTheCallerAndAClientErrorFromTheServer.
+    //     in WatchConnectEdgeCaseTests.RejectedRange_IsAnArgumentErrorFromTheCallerAndAClientErrorFromTheServer.
     //
     // The server-origin twins below ARE repeated in shape but not in strength: the existing tests
     // assert only the CeleriantClientException base, which a ShardRoutingException or a

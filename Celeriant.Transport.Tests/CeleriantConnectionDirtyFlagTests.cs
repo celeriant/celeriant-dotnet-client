@@ -4,9 +4,8 @@ using System.Net.Sockets;
 namespace Celeriant.Transport.Tests;
 
 /// <summary>
-/// The dirty flag means "the socket may be desynced", so it must be cleared the instant the frame
-/// is off the socket, ahead of decode. Armed around work that is not socket work, a purely local
-/// failure on a fully drained stream permanently retires a healthy connection.
+/// A fully consumed frame clears partial-read state, but malformed compressed bodies
+/// still violate the protocol and must retire the connection.
 /// </summary>
 public class CeleriantConnectionDirtyFlagTests
 {
@@ -36,15 +35,14 @@ public class CeleriantConnectionDirtyFlagTests
     }
 
     /// <summary>
-    /// A response frame read off the socket in full leaves the stream on a clean message boundary,
-    /// so a failure in the local decompress that follows must not retire the connection.
+    /// Malformed compression is a protocol failure even when every frame byte was consumed.
+    /// The failed connection must refuse the next request before any bytes reach the server.
     /// </summary>
     [Fact]
-    public async Task DecodeFailureOnAFullyDrainedFrame_DoesNotRetireTheConnection()
+    public async Task DecodeFailureOnAFullyDrainedFrame_RetiresTheConnectionWithoutSendingAgain()
     {
         byte[] dict = new byte[4096];
         new Random(7).NextBytes(dict);
-        byte[] goodBody = "the-second-answer"u8.ToArray();
 
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -65,10 +63,8 @@ public class CeleriantConnectionDirtyFlagTests
             byte[] garbage = [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
             await WriteFrameAsync(stream, CompressedFrame(DataResponse, garbage, uncompressedLength: 32));
 
-            await ConsumeFrameAsync(stream);                      // request 2
-            await WriteFrameAsync(stream, Frame(DataResponse, goodBody));
-
-            await Task.Delay(2000);
+            // Disposal should close the poisoned connection without a second request.
+            Assert.Equal(0, await stream.ReadAsync(new byte[1]));
         });
 
         try
@@ -76,28 +72,20 @@ public class CeleriantConnectionDirtyFlagTests
             await using var conn = await CeleriantConnection.ConnectAsync(
                 $"127.0.0.1:{port}", TimeSpan.FromSeconds(5), null, new DictCodec(dict), new ThrowingExceptionFactory());
 
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             Assert.NotNull(conn.CurrentDict);
 
             var decodeFailure = await Record.ExceptionAsync(() => conn.SendAsync(DataRequest, [1, 2, 3], false, 0));
-            Assert.NotNull(decodeFailure);
-            Assert.False(
-                decodeFailure is IOException,
-                $"precondition: the failure must be the local zstd unwrap, got {decodeFailure.GetType().Name}");
+            var protocolFailure = Assert.IsType<InvalidDataException>(decodeFailure);
+            Assert.NotNull(protocolFailure.InnerException);
+            Assert.True(conn.IsPoisoned);
 
-            Assert.False(
-                conn.IsPoisoned,
-                "the response frame was read off the socket in full and only the local decode "
-                + "failed, so the stream is on a clean message boundary and the connection must "
-                + "stay usable");
-
-            var second = await conn.SendAsync(DataRequest, [4, 5, 6], false, 0);
-            Assert.Equal(goodBody, second.Body);
+            await Assert.ThrowsAsync<IOException>(() => conn.SendAsync(DataRequest, [4, 5, 6], false, 0));
         }
         finally
         {
             listener.Stop();
-            await Task.WhenAny(session, Task.Delay(1000));
+            await session.WaitAsync(TimeSpan.FromSeconds(3));
         }
     }
 

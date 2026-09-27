@@ -7,10 +7,11 @@ using Moq;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Adversarial-review probes for the leader-default read routing change.
-/// Temporary: passing tests are removed after review unless they pin a real gap.
+/// Read failover along the candidate list: dial and request timeouts and busy followers skip to
+/// the next candidate, the tail leader is reached and its error surfaces, and a read during leader
+/// discovery never finds a leader without a node pool.
 /// </summary>
-public class AdvRevRoutingTests
+public class FollowerReadFailoverTests
 {
     private static readonly AggregateKey TestKey = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
@@ -71,12 +72,12 @@ public class AdvRevRoutingTests
         });
 
     // -----------------------------------------------------------------------
-    // Angle 3: dial timeout in OPT-IN mode must also fail over (arm not gated
+    // Dial timeout in OPT-IN mode must also fail over (arm not gated
     // on default mode), and request timeout / busy in opt-in must skip.
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task AdvRev_OptIn_DialTimeout_FailsOverToOtherFollower()
+    public async Task OptIn_DialTimeout_FailsOverToOtherFollower()
     {
         var busted = MockPoolThatThrows("b:1", new ConnectionTimeoutException("dial timed out"));
         var healthy = MockPoolThatSucceeds("c:1");
@@ -98,7 +99,7 @@ public class AdvRevRoutingTests
     }
 
     [Fact]
-    public async Task AdvRev_OptIn_RequestTimeout_SkipsToNextFollower()
+    public async Task OptIn_RequestTimeout_SkipsToNextFollower()
     {
         var timingOut = MockPoolThatThrows("b:1", new CeleriantTimeoutException("request timed out"));
         var healthy = MockPoolThatSucceeds("c:1");
@@ -117,7 +118,7 @@ public class AdvRevRoutingTests
     }
 
     [Fact]
-    public async Task AdvRev_OptIn_ServerBusy_SkipsToNextFollower()
+    public async Task OptIn_ServerBusy_SkipsToNextFollower()
     {
         var busy = MockPoolThatThrows("b:1", new ServerBusyException(new ErrorResponse()));
         var healthy = MockPoolThatSucceeds("c:1");
@@ -136,7 +137,7 @@ public class AdvRevRoutingTests
     }
 
     // -----------------------------------------------------------------------
-    // Angle 4: race: a read between "_leaderAddress = ex.LeaderAddress" and
+    // Race: a read between "_leaderAddress = ex.LeaderAddress" and
     // "GetOrCreateNodePool(...)" in ExecuteLeaderOperationAsync sees a leader
     // with no registered pool. GetReadNodeAddresses now prepends that address
     // ([leader, ..all]) and ExecuteOnAnyNodeAsync indexes _nodePools[addr]
@@ -145,7 +146,7 @@ public class AdvRevRoutingTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task AdvRev_ReadDuringLeaderDiscovery_MustNotThrowKeyNotFound()
+    public async Task ReadDuringLeaderDiscovery_MustNotThrowKeyNotFound()
     {
         var factoryEntered = new SemaphoreSlim(0);
         var factoryRelease = new SemaphoreSlim(0);
@@ -198,7 +199,7 @@ public class AdvRevRoutingTests
     }
 
     // -----------------------------------------------------------------------
-    // Angle 4: rotation validity at counter wraparound and no dup/miss per call.
+    // Rotation validity at counter wraparound and no dup/miss per call.
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
@@ -209,7 +210,7 @@ public class AdvRevRoutingTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task AdvRev_OptIn_AllFollowersDown_LeaderServesRead()
+    public async Task OptIn_AllFollowersDown_LeaderServesRead()
     {
         var deadB = MockPoolThatThrows("b:1", new ConnectionFailedException("refused"));
         var deadC = MockPoolThatThrows("c:1", new ConnectionFailedException("refused"));
@@ -229,7 +230,7 @@ public class AdvRevRoutingTests
     }
 
     [Fact]
-    public async Task AdvRev_OptIn_AllCandidatesBusy_PropagatesServerBusyNotUnreachable()
+    public async Task OptIn_AllCandidatesBusy_PropagatesServerBusyNotUnreachable()
     {
         var busyB = MockPoolThatThrows("b:1", new ServerBusyException(new ErrorResponse()));
         var busyC = MockPoolThatThrows("c:1", new ServerBusyException(new ErrorResponse()));
@@ -248,7 +249,7 @@ public class AdvRevRoutingTests
     }
 
     [Fact]
-    public async Task AdvRev_OptIn_Rotation_ValidAtIntMaxWraparound()
+    public async Task OptIn_Rotation_ValidAtIntMaxWraparound()
     {
         var options = MakeOptions("p:1", seeds: ["b:1", "c:1", "d:1"], routeReadsToFollowers: true);
         await using var pool = new CeleriantPool(options, (addr, _, _) => MockPool(addr).Object);

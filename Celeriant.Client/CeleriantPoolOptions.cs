@@ -44,7 +44,9 @@ public sealed class CeleriantPoolOptions
     /// wire page, not the whole aggregate; the server chooses the page size, and the client does not
     /// renegotiate it. Keep this at or above the server's configured response page size — set it lower
     /// and a read whose first page exceeds it throws <see cref="Errors.ProtocolException"/> with no
-    /// smaller page to fall back to, making large aggregates unreadable through this pool.</summary>
+    /// smaller page to fall back to, making large aggregates unreadable through this pool. The reply
+    /// to Identify is read under <see cref="Celeriant.Transport.HandshakeLimits"/> instead, so a small
+    /// cap still admits a server's compression dictionary.</summary>
     public long MaxResponseSize { get; init; } = 64 * 1024 * 1024;
 
     /// <summary>

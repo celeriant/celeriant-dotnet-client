@@ -134,7 +134,7 @@ public class TransportGuardRoutingTests
     public async Task AnOversizedResponseToAWrite_IsProtocolAndIsNeverReSent()
     {
         int writes = 0;
-        await using var node = FakeCeleriantServer.Start(async (session, messageType, _) =>
+        await using var node = FakeCeleriantServer.Start(async (session, messageType, body) =>
         {
             if (messageType != MessageTypes.Requests.Write)
                 return;
@@ -332,11 +332,11 @@ public class TransportGuardRoutingTests
     };
 
     private static FakeCeleriantServer.RequestHandler ShaOnlyIdentifyThenWriteOk()
-        => async (session, messageType, _) =>
+        => async (session, messageType, body) =>
         {
             if (messageType == MessageTypes.Requests.Identify)
             {
-                await session.SendFrameAsync(MessageTypes.Responses.Identify, ShaOnlyIdentifyBody());
+                await session.SendFrameAsync(MessageTypes.Responses.Identify, ShaOnlyIdentifyBody(WireCodec.Deserialize<IdentifyRequest>(body).CorrelationId));
                 return;
             }
 
@@ -375,7 +375,7 @@ public class TransportGuardRoutingTests
     {
         var header = new byte[WireHeader.Size];
         WireHeader
-            .ForRequest(WireHeader.ProtocolVersionV3, MessageTypes.Responses.Write, 2_000_000)
+            .ForRequest(WireHeader.ProtocolVersionV5, MessageTypes.Responses.Write, 2_000_000)
             .WriteTo(header);
         return header;
     }
@@ -398,12 +398,12 @@ public class TransportGuardRoutingTests
                     .ToArray(),
             }));
 
-    private static byte[] ShaOnlyIdentifyBody()
+    private static byte[] ShaOnlyIdentifyBody(Guid? correlation)
     {
         var buffer = new ArrayBufferWriter<byte>();
         var writer = new MessagePackWriter(buffer);
         writer.WriteArrayHeader(5);
-        writer.WriteNil();               // correlation_id
+        CeleriantNullableGuidFormatter.Instance.Serialize(ref writer, correlation, WireCodec.Options);
         writer.WriteNil();               // client_id
         writer.WriteNil();               // access_level
         writer.Write(ShaUnderTest);      // compression_dict_sha256

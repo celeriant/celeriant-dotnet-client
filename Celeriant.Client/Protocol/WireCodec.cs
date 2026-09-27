@@ -3,7 +3,7 @@ using MessagePack;
 namespace Celeriant.Client.Protocol;
 
 /// <summary>
-/// MessagePack (V3) body serialization for the Celeriant storage wire protocol. Framing and
+/// MessagePack (V5) body serialization for the Celeriant storage wire protocol. Framing and
 /// zstd-dictionary compression live in the shared transport layer; this only turns typed
 /// request/response payloads into bytes and back.
 /// </summary>

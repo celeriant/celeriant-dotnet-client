@@ -24,10 +24,13 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
             static client => client.IsPoisoned,
             StorageTransportExceptionFactory.Instance,
             static client => client.IsUnfitForReuse,
-            // A ProtocolException from the factory means the node answered (an unresolvable
-            // dictionary sha, a malformed Identify reply). The node is up, so it must not open
-            // the breaker.
-            static ex => ex is not ProtocolException);
+            // Only a wire failure means the node is down. Anything else from the factory means
+            // the node answered (an identity rejection, a server error, a protocol error, an
+            // unresolvable dictionary sha) or the failure is local (bad key material). Arming the
+            // breaker on those would hide the real cause behind "circuit breaker open" for every
+            // request until it closes. Mirrors is_dial_failure in the Rust client's pool.rs.
+            static ex => ex is ConnectionFailedException or ConnectionTimeoutException
+                             or RequestOutcomeUnknownException);
     }
 
     public string Address => _inner.Address;
@@ -78,8 +81,11 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
     private static async Task<CeleriantClient> CreateConnectionAsync(
         string address, CeleriantPoolOptions options, DictCache dictCache, CancellationToken ct)
     {
-        var client = await CeleriantClient.ConnectAsync(
-            address, options.ConnectionTimeout, options.TlsConfig, ct).ConfigureAwait(false);
+        // Sharing the pool's cache makes every Identify on this connection, the explicit one below
+        // or the implicit one ahead of the first request when no identity is configured, advertise
+        // what the pool already learned and teach the pool what the server ships.
+        var client = await CeleriantClient.ConnectWithDictCacheAsync(
+            address, options.ConnectionTimeout, options.TlsConfig, dictCache, ct).ConfigureAwait(false);
 
         client.WithMaxRequestSize(options.MaxRequestSize)
               .WithMaxResponseSize(options.MaxResponseSize)
@@ -91,20 +97,13 @@ internal sealed class NodeConnectionPool : INodeConnectionPool
             // here or it leaks until a finalizer runs.
             try
             {
-                // Advertise our known dictionary sha so the server can skip resending its bytes,
-                // and resolve a confirmed-but-unsent sha from the shared pool cache.
-                await client.IdentifyAsync(identityConfig, dictCache.LastSha, dictCache.DictForSha, ct)
-                    .ConfigureAwait(false);
+                await client.IdentifyAsync(identityConfig, ct).ConfigureAwait(false);
             }
             catch
             {
                 await client.DisposeAsync().ConfigureAwait(false);
                 throw;
             }
-
-            // If this connection received (or confirmed) a dictionary, share it pool-wide.
-            if (client.CurrentDict is { } dict)
-                dictCache.CacheDict(dict.Sha, dict.Bytes);
         }
 
         return client;

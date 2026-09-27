@@ -5,11 +5,11 @@ using System.Net.Sockets;
 namespace Celeriant.Transport.Tests;
 
 /// <summary>
-/// Adversarial-review pin: the transport's connect path (dial + TLS handshake) must classify
+/// The transport's connect path (dial + TLS handshake) must classify
 /// a timeout as ConnectTimeout (failover-class), not Timeout (request-class). Nothing else in
 /// either suite exercises this classification against the real connect code.
 /// </summary>
-public class AdvRevRoutingTests
+public class ConnectTimeoutClassificationTests
 {
     private sealed class ConnectTimeoutMarker(string message) : Exception(message);
     private sealed class RequestTimeoutMarker(string message) : Exception(message);

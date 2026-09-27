@@ -6,7 +6,7 @@ namespace Celeriant.Client.Tests;
 /// seed order, the checkout preflight, and the read walk's handling of local refusals and lost
 /// responses. Drives the scripted cluster in <see cref="LeaderRoutingFakes"/>.
 /// </summary>
-public class LeaderRoutingImplementationTests
+public class LeaderRoutingWalkTests
 {
     /// <summary>
     /// The leader reads the whole write and then says nothing until the request timeout. The

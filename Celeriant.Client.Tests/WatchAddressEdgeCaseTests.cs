@@ -9,14 +9,14 @@ using Celeriant.Client.Watch;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Adversarial probes against the watch address and teardown surface: <c>WatchConnection.Address</c>,
+/// Edge cases of the watch address and teardown surface: <c>WatchConnection.Address</c>,
 /// the poison that stops sibling shard readers and the single-owner-per-socket rule that goes with
 /// it, and the cached-leader reset on a failed watch dial.
 ///
-/// Every probe is aimed at one of two states: a caller subscribed and blind, or a caller blind and
-/// not told. Where a probe can only reach a resource leak rather than a blindness, it says so.
+/// Every test is aimed at one of two states: a caller subscribed and blind, or a caller blind and
+/// not told. Where a test can only reach a resource leak rather than a blindness, it says so.
 /// </summary>
-public class WatchAddressParityAdversarialTests
+public class WatchAddressEdgeCaseTests
 {
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);
 
@@ -98,7 +98,7 @@ public class WatchAddressParityAdversarialTests
     /// <summary>
     /// The routing half of the same defect, without counting sockets: after a watch has failed over
     /// away from the primary, the primary must not still be named as where the next operation goes
-    /// first. This is the same contract the landed oracle test asserts — it only ever exercises it
+    /// first. This is the same contract ReadRoutingOrderTests asserts — it only ever exercises it
     /// with a cached leader that is not the primary.
     /// </summary>
     [Fact]

@@ -12,7 +12,7 @@ namespace Celeriant.Client.Tests;
 /// is invalid input and must be rejected before anything reaches the wire, on the list path as the
 /// watch path already does.
 /// </summary>
-public class NegativeStartShardBlackBoxTests
+public class NegativeStartShardTests
 {
     [Fact]
     public async Task List_StartShardNegative_IsRejectedClientSide()

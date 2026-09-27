@@ -54,6 +54,9 @@ public sealed class CeleriantConnection : IAsyncDisposable
     /// <summary>The compression dictionary negotiated for this connection, if any.</summary>
     public CachedDict? CurrentDict => _dict;
 
+    private volatile bool _identified;
+    public bool IsIdentified => _identified;
+
     /// <summary>
     /// True once this connection's framing is indeterminate: a transport/protocol error poisoned
     /// it, or a request went out whose response was never read (a cancelled caller). A poisoned
@@ -202,18 +205,24 @@ public sealed class CeleriantConnection : IAsyncDisposable
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Perform the Identify handshake. Negotiates the compression dictionary (advertising
-    /// <paramref name="knownDictSha"/> so the server can skip re-sending bytes it already gave us,
-    /// resolving a confirmed-but-unsent sha via <paramref name="dictLookup"/>) and returns the
+    /// Perform the Identify handshake. Negotiates the compression dictionary and returns the
     /// server-assigned client id, if any. Identify is always sent uncompressed.
     /// </summary>
+    /// <param name="identity">The credentials to present.</param>
+    /// <param name="advertised">
+    /// The dictionary whose sha this connection advertises, so the server can skip shipping bytes
+    /// the client already holds: a <see cref="DictCache.Snapshot"/> taken before the call, or
+    /// <see cref="BuiltinDictionary.Dict"/> for a connection with no pool cache. A sha-only confirm
+    /// resolves against this and the built-in alone (<see cref="DictCache.Resolve"/>).
+    /// </param>
+    /// <param name="ct">Cancels the handshake.</param>
     public async Task<Guid?> IdentifyAsync(
         IdentifyParams identity,
-        string? knownDictSha = null,
-        Func<string, byte[]?>? dictLookup = null,
+        CachedDict advertised,
         CancellationToken ct = default)
     {
-        byte[] payload = _codec.EncodeIdentify(identity with { KnownDictSha256 = knownDictSha });
+        identity = identity with { KnownDictSha256 = advertised.Sha, CorrelationId = Guid.NewGuid() };
+        byte[] payload = _codec.EncodeIdentify(identity);
         var header = WireHeader.ForRequest(_codec.ProtocolVersion, _codec.IdentifyRequestType, (uint)payload.Length);
 
         using CancellationTokenSource? timeoutCts = BuildTimeoutCts(ct);
@@ -230,14 +239,19 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
             _streamDirty = true;
             await SendHeaderAndPayloadAsync(header, payload, effectiveCt).ConfigureAwait(false);
-            (uint respType, byte[] body) = await ReadFrameCoreAsync(effectiveCt).ConfigureAwait(false);
+            (uint respType, byte[] body) = await ReadFrameCoreAsync(effectiveCt, identifyReply: true).ConfigureAwait(false);
 
             if (respType != _codec.IdentifyResponseType)
             {
                 // A failed Identify arrives as a product error frame, not the success type.
-                throw _codec.TryMapErrorFrame(respType, body)
-                    ?? Poison(_ex.Protocol(
-                        $"Expected Identify response (type {_codec.IdentifyResponseType}), got {respType}."));
+                Exception? error;
+                try { error = _codec.TryMapIdentifyErrorFrame(respType, body, identity.CorrelationId); }
+                catch (Exception inner)
+                {
+                    throw Poison(_ex.Protocol("Failed to deserialize Identify error response.", inner));
+                }
+                throw Poison(error ?? _ex.Protocol(
+                    $"Expected Identify response (type {_codec.IdentifyResponseType}), got {respType}."));
             }
 
             IdentifyResult result;
@@ -250,22 +264,28 @@ public sealed class CeleriantConnection : IAsyncDisposable
                 throw Poison(_ex.Protocol("Failed to deserialize IdentifyResponse.", inner));
             }
 
+            if (_codec.RequireIdentifyCorrelation && result.CorrelationId != identity.CorrelationId)
+                throw Poison(_ex.Protocol("Identify correlation id mismatch."));
+
             // sha + bytes  → server shipped a new/refreshed dictionary; store it.
-            // sha only     → server confirmed our advertised sha; resolve bytes from the pool
-            //                cache. A cache miss is fatal here: proceeding with no dictionary
-            //                fails on the first ZstdDict response instead of at the handshake,
-            //                where the caller can still reconnect without the advertised sha.
+            // sha only     → server confirmed a sha we hold; resolve it against what this
+            //                connection advertised, not the pool's shared slot, which another
+            //                connection may have replaced since. A miss is fatal here: proceeding
+            //                with no dictionary fails on the first ZstdDict response instead of at
+            //                the handshake, where the caller can still reconnect.
             // no sha       → cluster is not using ZstdDict; no dictionary.
             _dict = (result.DictSha, result.DictBytes) switch
             {
                 (string sha, byte[] bytes) => new CachedDict(sha, bytes),
-                (string sha, null) => dictLookup?.Invoke(sha) is { } cached
+                (string sha, null) => DictCache.Resolve(advertised, sha) is { } cached
                     ? new CachedDict(sha, cached)
                     : throw Poison(_ex.Protocol(
                         $"Server confirmed dictionary sha '{sha}' but no matching dictionary is cached.")),
                 (null, _) => null,
             };
 
+            // Publish the dictionary before callers bypass the first-opening gate.
+            _identified = true;
             return result.ClientId;
         }
         // Identify is part of establishing the connection, so its deadline is connect-class: no
@@ -335,7 +355,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
             _streamDirty = true;
             await SendHeaderAndPayloadAsync(header, body, effectiveCt).ConfigureAwait(false);
             written = true;
-            (uint respType, byte[] respBody) = await ReadFrameCoreAsync(effectiveCt).ConfigureAwait(false);
+            (uint respType, byte[] respBody) = await ReadFrameCoreAsync(effectiveCt, identifyReply: false).ConfigureAwait(false);
             return new RawFrame(respType, respBody);
         }
         catch (OperationCanceledException) when (IsTimeoutCancellation(timeoutCts, ct))
@@ -427,7 +447,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
     {
         try
         {
-            (uint respType, byte[] body) = await ReadFrameCoreAsync(ct).ConfigureAwait(false);
+            (uint respType, byte[] body) = await ReadFrameCoreAsync(ct, identifyReply: false).ConfigureAwait(false);
             return new RawFrame(respType, body);
         }
         catch (EndOfStreamException inner)
@@ -490,7 +510,9 @@ public sealed class CeleriantConnection : IAsyncDisposable
             : WireHeader.ForCompressedRequest(_codec.ProtocolVersion, requestType, compressedLength, uncompressedLength, compression);
     }
 
-    private async Task<(uint respType, byte[] body)> ReadFrameCoreAsync(CancellationToken ct)
+    // `identifyReply` marks the reply to Identify, bounded by HandshakeLimits instead of the
+    // caller's cap; every other frame stays under the caller's cap.
+    private async Task<(uint respType, byte[] body)> ReadFrameCoreAsync(CancellationToken ct, bool identifyReply)
     {
         // An earlier read was abandoned part-way through a frame, so the next bytes
         // on this socket are that frame's tail. Reading them as a fresh header
@@ -514,16 +536,19 @@ public sealed class CeleriantConnection : IAsyncDisposable
             ArrayPool<byte>.Shared.Return(headerBuf);
         }
 
-        EnsureResponseWithinMax(responseHeader);
+        long maxBytes = identifyReply
+            ? HandshakeLimits.IdentifyReplyMaxBytes(
+                isIdentifyResponse: responseHeader.MessageType == _codec.IdentifyResponseType,
+                callerMaxResponseSize: _maxResponseSize)
+            : _maxResponseSize;
+        EnsureResponseWithinMax(responseHeader, maxBytes);
 
         int respLen = (int)responseHeader.CompressedLength;
         byte[] responsePayload = new byte[respLen];
         await ReadExactIntoAsync(responsePayload, respLen, ct).ConfigureAwait(false);
 
-        // The frame is off the socket here, so the stream is back on a message
-        // boundary. Decompression is pure and cannot desynchronise anything —
-        // clearing after it would retire a connection that is perfectly usable
-        // whenever a body fails to unwrap.
+        // The complete frame is off the socket. Decompress separately poisons the
+        // connection if its body violates the compression or length contract.
         _streamDirty = false;
         _framePartialBytes = 0;
 
@@ -532,7 +557,7 @@ public sealed class CeleriantConnection : IAsyncDisposable
 
     private RawFrame ReadBodySync(WireHeader responseHeader)
     {
-        EnsureResponseWithinMax(responseHeader);
+        EnsureResponseWithinMax(responseHeader, _maxResponseSize);
 
         int respLen = (int)responseHeader.CompressedLength;
         byte[] responsePayload = ArrayPool<byte>.Shared.Rent(respLen);
@@ -540,9 +565,8 @@ public sealed class CeleriantConnection : IAsyncDisposable
         {
             ReadExactSync(responsePayload.AsSpan(0, respLen));
 
-            // Frame is off the socket; same boundary as the async path, and ahead of
-            // Decompress for the same reason: a body that fails to unwrap leaves the
-            // stream on a message boundary, not mid-message.
+            // The complete frame is off the socket; malformed decompression still
+            // poisons the connection through the shared Decompress path.
             _framePartialBytes = 0;
 
             // Decompress needs an exact-length buffer; copy out of the pooled rental.
@@ -559,24 +583,51 @@ public sealed class CeleriantConnection : IAsyncDisposable
     /// Both lengths are server-supplied and the uncompressed one sizes the decompression buffer,
     /// so both are checked before any allocation.
     /// </summary>
-    private void EnsureResponseWithinMax(WireHeader header)
+    private void EnsureResponseWithinMax(WireHeader header, long maxBytes)
     {
-        if (header.CompressedLength > _maxResponseSize || header.UncompressedLength > _maxResponseSize)
+        if (header.Version != _codec.ProtocolVersion)
+            throw Poison(_ex.Protocol($"Protocol version mismatch: expected {_codec.ProtocolVersion}, received {header.Version}."));
+        var compression = (CompressionType)header.CompressionType;
+        if (compression == CompressionType.None &&
+            header.CompressedLength != header.UncompressedLength)
+            throw Poison(_ex.Protocol("Uncompressed response must advertise equal compressed and uncompressed lengths."));
+        if (header.CompressedLength > int.MaxValue || header.UncompressedLength > int.MaxValue)
+            throw Poison(_ex.Protocol("Response length exceeds the supported buffer size."));
+        if (header.CompressedLength > maxBytes || header.UncompressedLength > maxBytes)
             throw Poison(_ex.Protocol(
-                $"Response payload (compressed {header.CompressedLength} bytes, uncompressed "
-                + $"{header.UncompressedLength} bytes) exceeds maximum allowed size {_maxResponseSize}."));
+                $"Response payload (type {header.MessageType}, compressed {header.CompressedLength} bytes, uncompressed "
+                + $"{header.UncompressedLength} bytes) exceeds maximum allowed size {maxBytes}."));
+        // Refused from the header, so an Identify reply (which can never have a dictionary yet) or a frame
+        // this connection cannot decode costs no body read.
+        if (compression != CompressionType.None && compression != CompressionType.ZstdDict)
+            throw Poison(_ex.Protocol($"Unknown compression type {header.CompressionType} in response."));
+        if (compression == CompressionType.ZstdDict && _dict is null)
+            throw Poison(_ex.Protocol("Received a ZstdDict-compressed response but no dictionary is cached for this connection."));
     }
 
     private byte[] Decompress(WireHeader header, byte[] payload)
-        => (CompressionType)header.CompressionType switch
+    {
+        if ((CompressionType)header.CompressionType == CompressionType.None)
+            return payload;
+        // EnsureResponseWithinMax already refused any other compression, and ZstdDict without a dictionary.
+        var dict = _dict!;
+
+        byte[] decoded;
+        try
         {
-            CompressionType.None => payload,
-            CompressionType.ZstdDict when _dict is { } d =>
-                DictCompression.DecompressWithDict(payload, header.UncompressedLength, d.Bytes),
-            CompressionType.ZstdDict =>
-                throw Poison(_ex.Protocol("Received a ZstdDict-compressed response but no dictionary is cached for this connection.")),
-            _ => throw Poison(_ex.Protocol($"Unknown compression type {header.CompressionType} in response.")),
-        };
+            // The advertised size was checked against the receive ceiling before
+            // allocation and remains the decompressor's hard output bound.
+            decoded = DictCompression.DecompressWithDict(payload, header.UncompressedLength, dict.Bytes);
+        }
+        catch (Exception inner)
+        {
+            throw Poison(_ex.Protocol("Failed to decompress response payload.", inner));
+        }
+        if (decoded.Length != header.UncompressedLength)
+            throw Poison(_ex.Protocol(
+                $"Decoded response length {decoded.Length} differs from advertised length {header.UncompressedLength}."));
+        return decoded;
+    }
 
     private async Task SendHeaderAndPayloadAsync(WireHeader header, byte[] payload, CancellationToken ct)
     {

@@ -60,7 +60,7 @@ public sealed class CeleriantPool : ICeleriantPool
     private readonly ConcurrentDictionary<string, INodeConnectionPool> _nodePools = new();
     private readonly Func<string, CeleriantPoolOptions, DictCache, INodeConnectionPool> _poolFactory;
 
-    // Shared compression-dictionary cache: one negotiated dictionary serves every node pool.
+    // Shared compression-dictionary cache: the built-in plus the one dictionary learned last, for every node pool.
     private readonly DictCache _dictCache = new();
 
     // The address believed to be the current leader. Updated on failover.
@@ -286,7 +286,8 @@ public sealed class CeleriantPool : ICeleriantPool
 
     /// <summary>
     /// Stream all event batches for an aggregate, automatically following pagination cursors.
-    /// Leases a single connection for the duration of the enumeration.
+    /// Leases a single connection for the duration of the enumeration. A page whose reply is lost
+    /// is sent once more on another connection to the same node, and the stream carries on from that page.
     /// </summary>
     /// <param name="key">The aggregate to read from.</param>
     /// <param name="filters">Optional read filters. When null, reads all events from event batch index 1
@@ -307,9 +308,38 @@ public sealed class CeleriantPool : ICeleriantPool
         ReadFilters? filters,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        await using var conn = await GetAnyConnectionAsync(ct).ConfigureAwait(false);
-        await foreach (var batch in conn.Client.ReadAllAsync(key, filters, ct).ConfigureAwait(false))
-            yield return batch;
+        var (node, first) = await GetAnyConnectionWithAddressAsync(ct).ConfigureAwait(false);
+        PooledConnection? conn = first;
+        try
+        {
+            async Task<ReadResponse> ReadPageAsync(ReadRequest page, CancellationToken token)
+            {
+                try
+                {
+                    return await conn.Client.ReadAsync(page, token).ConfigureAwait(false);
+                }
+                catch (RequestOutcomeUnknownException)
+                {
+                    // A read changes nothing, so the lost page is sent once more on another connection.
+                    // Same node: a replica further behind would take the cursor and end the stream early.
+                    var lost = conn;
+                    conn = null;
+                    lost.MarkBroken();
+                    await lost.DisposeAsync().ConfigureAwait(false);
+                    conn = await GetOrCreateNodePool(node).GetConnectionAsync(token).ConfigureAwait(false);
+                    return await conn.Client.ReadAsync(page, token).ConfigureAwait(false);
+                }
+            }
+
+            await foreach (var batch in ReadExtensions.PaginateAsync(
+                               ReadPageAsync, key, filters ?? ReadFilters.From(1), ct).ConfigureAwait(false))
+                yield return batch;
+        }
+        finally
+        {
+            if (conn is not null)
+                await conn.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -423,7 +453,7 @@ public sealed class CeleriantPool : ICeleriantPool
             var addr = nodeAddresses[i];
             try
             {
-                return await WatchConnection.ConnectAsync(addr, request, watchOptions, ct)
+                return await WatchConnection.ConnectAsync(addr, request, watchOptions, _dictCache, ct)
                     .ConfigureAwait(false);
             }
             catch (ConnectionFailedException) when (i < nodeAddresses.Length - 1)
@@ -496,6 +526,11 @@ public sealed class CeleriantPool : ICeleriantPool
     /// (refused or dial timeout), tries the next candidate in order.
     /// </summary>
     private async Task<PooledConnection> GetAnyConnectionAsync(CancellationToken ct)
+        => (await GetAnyConnectionWithAddressAsync(ct).ConfigureAwait(false)).Connection;
+
+    /// <summary><see cref="GetAnyConnectionAsync"/>, also naming the node the connection is to.</summary>
+    private async Task<(string Address, PooledConnection Connection)> GetAnyConnectionWithAddressAsync(
+        CancellationToken ct)
     {
         ThrowIfDisposed();
 
@@ -505,7 +540,7 @@ public sealed class CeleriantPool : ICeleriantPool
             var addr = nodeAddresses[i];
             try
             {
-                return await GetOrCreateNodePool(addr).GetConnectionAsync(ct).ConfigureAwait(false);
+                return (addr, await GetOrCreateNodePool(addr).GetConnectionAsync(ct).ConfigureAwait(false));
             }
             catch (ConnectionFailedException) when (i < nodeAddresses.Length - 1)
             {
@@ -633,6 +668,7 @@ public sealed class CeleriantPool : ICeleriantPool
 
         var nodeAddresses = GetReadNodeAddresses();
         bool toFollowers = _options.RouteReadsToFollowers;
+        bool resentOnLast = false;
 
         for (int i = 0; i < nodeAddresses.Length; i++)
         {
@@ -663,6 +699,14 @@ public sealed class CeleriantPool : ICeleriantPool
             catch (RequestOutcomeUnknownException) when (!lastCandidate)
             {
                 // A read is safe to re-issue, so a lost response is just another broken candidate.
+                continue;
+            }
+            catch (RequestOutcomeUnknownException) when (!resentOnLast)
+            {
+                // No candidate is left to move on to, so send the read once more to this node on a
+                // another connection. The broken one has already been retired.
+                resentOnLast = true;
+                i--;
                 continue;
             }
             catch (CeleriantTimeoutException) when (toFollowers && !lastCandidate)

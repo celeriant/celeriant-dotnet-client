@@ -7,18 +7,17 @@ using Celeriant.Transport;
 namespace Celeriant.Client.IntegrationTests;
 
 /// <summary>
-/// Live-server regression guards for the two behaviour bugs the blind adversarial API-surface program
-/// confirmed against a real node (2026-08-29). Harnesses archived under <c>session/harness/</c>.
+/// Live-server regressions for trim error metadata and derived client identities.
 /// </summary>
 [Collection("Server")]
-public sealed class AdversarialRegressionTests
+public sealed class TrimAndIdentityLiveTests
 {
     private readonly ServerFixture _fixture;
 
-    public AdversarialRegressionTests(ServerFixture fixture) => _fixture = fixture;
+    public TrimAndIdentityLiveTests(ServerFixture fixture) => _fixture = fixture;
 
     /// <summary>
-    /// Block 3: <see cref="TrimIndexOutOfRangeException.CurrentMaxBatchIndex"/> must report the
+    /// <see cref="TrimIndexOutOfRangeException.CurrentMaxBatchIndex"/> must report the
     /// aggregate's real current version, not 0. The client previously read the wrong server key
     /// (<c>max_event_batch_index</c>; the server sends <c>max_aggregate_version</c>).
     /// </summary>
@@ -53,9 +52,9 @@ public sealed class AdversarialRegressionTests
     }
 
     /// <summary>
-    /// Block 5 (the program's headline bug): under client-identity enforcement, a write whose
-    /// <c>ClientId</c> is derived with <see cref="CeleriantCrypto.GenerateClientIdentity"/> — exactly
-    /// what the guide instructs — must be ACCEPTED. It was rejected before the endianness fix.
+    /// Under client-identity enforcement, a write whose <c>ClientId</c> is derived with
+    /// <see cref="CeleriantCrypto.GenerateClientIdentity"/> — exactly what the guide instructs —
+    /// must be ACCEPTED. It was rejected before the endianness fix.
     ///
     /// <para>Gated on a dedicated env var because it needs a server started with
     /// <c>--require-client-identity --insecure-allow-plaintext-auth</c>, which the standard fixture is

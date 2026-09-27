@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Celeriant.Client.Errors;
 using Celeriant.Client.Requests;
 using Celeriant.Client.Responses;
+using Celeriant.Transport;
 
 namespace Celeriant.Client.Watch;
 
@@ -72,6 +73,10 @@ public sealed class WatchConnection : IAsyncDisposable
 
     private readonly WatchOptions _options;
     private readonly string _address;
+    // Every shard connection, and every re-dial on the multi-shard fallback, advertises a snapshot
+    // of this cache in Identify and learns into it. A pool watch shares the pool's cache; a
+    // standalone watch owns one seeded with the built-in.
+    private readonly DictCache _dictCache;
     // 0 while live, 1 once disposal has begun. A single field rather than separate disposed and
     // stopping flags, so two concurrent DisposeAsync calls cannot both pass the guard and race
     // each other through the teardown.
@@ -80,10 +85,11 @@ public sealed class WatchConnection : IAsyncDisposable
     /// <summary>True once the caller has begun disposing: the one legitimate way a reader ends.</summary>
     private bool Stopping => Volatile.Read(ref _disposeState) != 0;
 
-    private WatchConnection(string address, WatchOptions options)
+    private WatchConnection(string address, WatchOptions options, DictCache dictCache)
     {
         _address = address;
         _options = options;
+        _dictCache = dictCache;
     }
 
     /// <summary>
@@ -105,13 +111,25 @@ public sealed class WatchConnection : IAsyncDisposable
     /// <param name="request">The watch filter request.</param>
     /// <param name="options">Connection and shard options.</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<WatchConnection> ConnectAsync(
+    public static Task<WatchConnection> ConnectAsync(
         string address,
         WatchRequest request,
         WatchOptions options,
         CancellationToken ct = default)
+        => ConnectAsync(address, request, options, new DictCache(), ct);
+
+    /// <summary>
+    /// Connect sharing <paramref name="dictCache"/>: each shard connection advertises a snapshot of
+    /// it in Identify and learns the dictionary the server confirms into it.
+    /// </summary>
+    internal static async Task<WatchConnection> ConnectAsync(
+        string address,
+        WatchRequest request,
+        WatchOptions options,
+        DictCache dictCache,
+        CancellationToken ct)
     {
-        var connection = new WatchConnection(address, options);
+        var connection = new WatchConnection(address, options, dictCache);
 
         if (options.MaxShardHint.HasValue)
         {
@@ -675,10 +693,11 @@ public sealed class WatchConnection : IAsyncDisposable
 
     private async Task<CeleriantClient> CreateClientAsync(string address, CancellationToken ct)
     {
-        var client = await CeleriantClient.ConnectAsync(
+        var client = await CeleriantClient.ConnectWithDictCacheAsync(
             address,
             _options.ConnectionTimeout,
             _options.TlsConfig,
+            _dictCache,
             ct).ConfigureAwait(false);
 
         if (_options.MaxRequestSize is { } maxRequestSize)

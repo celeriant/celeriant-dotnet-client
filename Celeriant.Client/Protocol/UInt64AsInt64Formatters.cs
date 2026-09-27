@@ -12,12 +12,12 @@ public sealed class UInt64AsInt64Formatter : IMessagePackFormatter<long>
 
     public void Serialize(ref MessagePackWriter writer, long value, MessagePackSerializerOptions options)
     {
-        writer.Write((ulong)value);
+        writer.Write(checked((ulong)value));
     }
 
     public long Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
     {
-        return (long)reader.ReadUInt64();
+        return checked((long)reader.ReadUInt64());
     }
 }
 
@@ -35,14 +35,14 @@ public sealed class NullableUInt64AsInt64Formatter : IMessagePackFormatter<long?
             writer.WriteNil();
             return;
         }
-        writer.Write((ulong)value.Value);
+        writer.Write(checked((ulong)value.Value));
     }
 
     public long? Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
     {
         if (reader.TryReadNil())
             return null;
-        return (long)reader.ReadUInt64();
+        return checked((long)reader.ReadUInt64());
     }
 }
 
@@ -62,7 +62,7 @@ public sealed class NullableUInt64ArrayAsInt64ArrayFormatter : IMessagePackForma
         }
         writer.WriteArrayHeader(value.Length);
         foreach (long item in value)
-            writer.Write((ulong)item);
+            writer.Write(checked((ulong)item));
     }
 
     public long[]? Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
@@ -73,7 +73,7 @@ public sealed class NullableUInt64ArrayAsInt64ArrayFormatter : IMessagePackForma
         int count = reader.ReadArrayHeader();
         var result = new long[count];
         for (int i = 0; i < count; i++)
-            result[i] = (long)reader.ReadUInt64();
+            result[i] = checked((long)reader.ReadUInt64());
         return result;
     }
 }

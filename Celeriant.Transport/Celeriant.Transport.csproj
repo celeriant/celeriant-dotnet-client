@@ -15,7 +15,7 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>Celeriant.Transport</PackageId>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <Authors>Celeriant</Authors>
     <Description>Shared transport layer for Celeriant .NET clients: wire framing, zstd-dictionary compression, the Identify handshake, and the pooled TCP/TLS connection. Consumed by Celeriant.Client; the body codec and message-type ids are injected per product.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
@@ -38,6 +38,16 @@
   <ItemGroup>
     <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The built-in json-web-events-v1 dictionary, byte-identical to the Rust server's
+         celeriant_wal/dicts copy. A fixed LogicalName keeps the lookup independent of folder layout. -->
+    <EmbeddedResource Include="Dicts\json_web_events_v1.zstd_dict" LogicalName="Celeriant.Transport.Dicts.json_web_events_v1.zstd_dict" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Celeriant.Transport.Tests" />
   </ItemGroup>
 
   <ItemGroup>

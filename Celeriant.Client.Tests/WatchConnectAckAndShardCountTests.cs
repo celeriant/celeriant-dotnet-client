@@ -20,7 +20,7 @@ namespace Celeriant.Client.Tests;
 /// while believing it covers every one the server named.</item>
 /// </list>
 /// </summary>
-public class WatchConnectParityImplementationTests
+public class WatchConnectAckAndShardCountTests
 {
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);
 

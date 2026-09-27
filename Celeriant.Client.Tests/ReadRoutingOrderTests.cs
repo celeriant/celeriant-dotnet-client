@@ -3,13 +3,10 @@ using Moq;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Blind-oracle routing tests for CeleriantPool read routing, written against the contract only,
-/// without reading the implementation. Mirrors the Rust client's routing oracle tests, adapted
-/// where the .NET contract diverges (leader starts as Options.Address, so it is never absent;
-/// unspecified tail order). With follower routing opted in: rotated followers first, leader LAST
-/// as a last resort, never excluded.
+/// Reads use the configured leader by default. Follower routing rotates followers
+/// first and retains the leader as a last resort.
 /// </summary>
-public class OracleRoutingTests
+public class ReadRoutingOrderTests
 {
     // -----------------------------------------------------------------------
     // Helpers
@@ -42,7 +39,7 @@ public class OracleRoutingTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task OracleDefaultNoLeaderPrimaryFirstAllKnownOnce()
+    public async Task DefaultNoLeaderPrimaryFirstAllKnownOnce()
     {
         // .NET: _leaderAddress starts as Options.Address, so "no cached leader"
         // collapses into leader-is-primary.
@@ -58,7 +55,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultCachedLeaderSeedFirstPrimaryLater()
+    public async Task DefaultCachedLeaderSeedFirstPrimaryLater()
     {
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1", "c:1"]));
         pool.SetLeaderForTesting("b:1");
@@ -73,11 +70,10 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultLeaderFirstStableAcrossCalls()
+    public async Task DefaultLeaderFirstStableAcrossCalls()
     {
-        // Adapted from oracle_default_order_stable_across_calls: .NET promises
-        // only index 0 stability (tail order unspecified), so pin leader-first
-        // and leader-once on every call, not the full list.
+        // .NET promises only index 0 stability (tail order unspecified), so pin
+        // leader-first and leader-once on every call, not the full list.
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1", "c:1"]));
         pool.SetLeaderForTesting("c:1");
 
@@ -90,7 +86,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultWatchLeaderElsePrimary()
+    public async Task DefaultWatchLeaderElsePrimary()
     {
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1"]));
 
@@ -100,12 +96,11 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultLeaderResetToPrimaryFirst()
+    public async Task DefaultLeaderResetToPrimaryFirst()
     {
-        // Adapted from oracle_default_clear_leader_reverts_to_primary_first. This pins the
-        // ROUTING consequence only — that a leader back at the primary puts the primary first —
-        // by setting it directly. It does not exercise the reset path itself; the tests that do
-        // are in WatchAddressParityTests and WatchAddressParityAdversarialTests.
+        // This pins the ROUTING consequence only — that a leader back at the primary puts the
+        // primary first — by setting it directly. It does not exercise the reset path itself; the tests that do
+        // are in WatchAddressParityTests and WatchAddressEdgeCaseTests.
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1", "c:1"]));
         pool.SetLeaderForTesting("b:1");
         pool.SetLeaderForTesting("p:1");
@@ -116,7 +111,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultSecondUpdateWins()
+    public async Task DefaultSecondUpdateWins()
     {
         await using var pool = CreatePool(MakeOptions("p:1", seeds: ["b:1", "c:1"]));
         pool.SetLeaderForTesting("b:1");
@@ -128,7 +123,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleDefaultUnknownLeaderGoesFirstKnownsFollow()
+    public async Task DefaultUnknownLeaderGoesFirstKnownsFollow()
     {
         // SetLeaderForTesting registers a node pool for the address (mirrors
         // discovery), so the former unknown is now a known node; leader-first applies.
@@ -148,7 +143,7 @@ public class OracleRoutingTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task OracleOptinLeaderPresentButLast()
+    public async Task OptinLeaderPresentButLast()
     {
         // The leader is the last-resort candidate, not excluded. Every follower
         // appears exactly once before it.
@@ -165,10 +160,9 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinFreshPoolTreatsPrimaryAsLeader()
+    public async Task OptinFreshPoolTreatsPrimaryAsLeader()
     {
-        // Adapted from oracle_optin_no_leader_all_known_candidates: .NET has no
-        // "no leader" state (_leaderAddress starts as Options.Address), so a fresh
+        // .NET has no "no leader" state (_leaderAddress starts as Options.Address), so a fresh
         // opt-in pool treats the primary as the leader: last resort, not excluded.
         await using var pool = CreatePool(
             MakeOptions("p:1", seeds: ["b:1", "c:1"], routeReadsToFollowers: true));
@@ -182,7 +176,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinRotationCoversAllFollowers()
+    public async Task OptinRotationCoversAllFollowers()
     {
         await using var pool = CreatePool(
             MakeOptions("p:1", seeds: ["b:1", "c:1", "d:1"], routeReadsToFollowers: true));
@@ -204,7 +198,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinWatchNeverLeaderAndRotates()
+    public async Task OptinWatchNeverLeaderAndRotates()
     {
         // Watch takes the first candidate, and the leader sits last, so it never
         // leads while a follower exists.
@@ -224,7 +218,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinWatchNoFollowersFallsBack()
+    public async Task OptinWatchNoFollowersFallsBack()
     {
         await using var pool = CreatePool(MakeOptions("p:1", routeReadsToFollowers: true));
         pool.SetLeaderForTesting("p:1");
@@ -235,7 +229,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinSingleNodeYieldsLeaderOnly()
+    public async Task OptinSingleNodeYieldsLeaderOnly()
     {
         // No special case: the general rule (rotated followers, then leader last)
         // with zero followers yields exactly [leader].
@@ -247,7 +241,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinLeaderResetRestoresFollower()
+    public async Task OptinLeaderResetRestoresFollower()
     {
         // Under leader-last the new leader is demoted to the tail, not removed;
         // resetting the leader to the primary promotes it back into the rotated
@@ -265,7 +259,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinOnlyLatestLeaderLast()
+    public async Task OptinOnlyLatestLeaderLast()
     {
         // Only the latest leader sits last; the prior leader rejoins the
         // rotated followers.
@@ -282,7 +276,7 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinUnknownLeaderLastLikeAnyLeader()
+    public async Task OptinUnknownLeaderLastLikeAnyLeader()
     {
         // In .NET, SetLeaderForTesting registers the address as a known node (mirrors
         // discovery), so the former unknown IS the leader: last resort, with
@@ -300,10 +294,10 @@ public class OracleRoutingTests
     }
 
     [Fact]
-    public async Task OracleOptinLeaderIsLastResort()
+    public async Task OptinLeaderIsLastResort()
     {
-        // Mirrors oracle_optin_leader_is_last_resort: whatever the rotation does,
-        // every candidate list starts with a follower and ends with the leader.
+        // Whatever the rotation does, every candidate list starts with a follower and ends
+        // with the leader.
         await using var pool = CreatePool(
             MakeOptions("p:1", seeds: ["b:1", "c:1"], routeReadsToFollowers: true));
         pool.SetLeaderForTesting("p:1");
@@ -320,6 +314,6 @@ public class OracleRoutingTests
     //
     // Rust's clear_leader pin-to-seed arm — the primary itself refusing, so the leader moves to the
     // first seed — was waived here as having no .NET analog. It has one now: a watch dial that the
-    // configured primary refuses. Covered in WatchAddressParityAdversarialTests, not by the
+    // configured primary refuses. Covered in WatchAddressEdgeCaseTests, not by the
     // SetLeaderForTesting adaptations above, which never reach the reset path.
 }

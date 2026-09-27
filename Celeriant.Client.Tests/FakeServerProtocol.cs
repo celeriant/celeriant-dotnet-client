@@ -43,6 +43,23 @@ internal static class FakeServerProtocol
             LastClientId = request.AggregateKey.AggregateId,
         });
 
+    public static byte[] ConflictFrame(Guid? correlation, AggregateKey key, ulong expected, ulong current)
+    {
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new MessagePack.MessagePackWriter(buffer);
+        writer.WriteArrayHeader(2);
+        CeleriantNullableGuidFormatter.Instance.Serialize(ref writer, correlation, WireCodec.Options);
+        writer.WriteArrayHeader(1);
+        writer.WriteArrayHeader(3);
+        writer.WriteArrayHeader(3);
+        foreach (var id in new[] { key.OrgId, key.AggregateTypeId, key.AggregateId })
+            CeleriantGuidFormatter.Instance.Serialize(ref writer, id, WireCodec.Options);
+        writer.Write(expected);
+        writer.Write(current);
+        writer.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
     public static byte[] ErrorFrame(uint errorCode, string message, Guid? correlationId)
         => WireCodec.Serialize(new ErrorResponse
         {

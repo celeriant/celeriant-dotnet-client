@@ -10,7 +10,7 @@ namespace Celeriant.Client.Tests;
 /// The leader walk must terminate in bounded time, and must not grow the node map without bound,
 /// when a server keeps redirecting to a never-ending stream of fresh leader addresses.
 /// </summary>
-public class LeaderRedirectBoundedOracleTests
+public class LeaderRedirectBoundTests
 {
     private static readonly AggregateKey TestKey = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 

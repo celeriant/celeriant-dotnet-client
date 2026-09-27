@@ -52,7 +52,7 @@ public class CeleriantConnectionMaxRequestSizeTests
             await WriteAsync(stream, Frame(DataResponse, []));
         }, async conn =>
         {
-            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null));
+            await conn.IdentifyAsync(new IdentifyParams(null, null, null, null, null), BuiltinDictionary.Dict);
             conn.WithMaxRequestSize(4096).WithCompressionThreshold(0);
 
             await Assert.ThrowsAsync<ArgumentException>(

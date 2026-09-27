@@ -10,7 +10,8 @@ public readonly record struct IdentifyParams(
     string? Nonce,
     string? Signature,
     string? ApiKey,
-    string? KnownDictSha256)
+    string? KnownDictSha256,
+    Guid? CorrelationId = null)
 {
     /// <summary>
     /// Build credentials from a resolved config: API key wins; otherwise an RSA key pair signs a

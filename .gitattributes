@@ -1,0 +1,2 @@
+# Byte-identical to the Rust copy; never normalise line endings.
+*.zstd_dict binary

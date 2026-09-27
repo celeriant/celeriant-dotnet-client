@@ -8,11 +8,11 @@ using Celeriant.Client.Watch;
 namespace Celeriant.Client.Tests;
 
 /// <summary>
-/// Adversarial probes of the fail-closed watch contract. Every test here is a claim about the
+/// Edge cases of the fail-closed watch contract. Every test here is a claim about the
 /// invariant "a caller holding a live WatchConnection is either receiving every matching event or
 /// being told it is not".
 /// </summary>
-public class WatchFailClosedAdversarialTests
+public class WatchFailClosedEdgeCaseTests
 {
     private static readonly TimeSpan HangBudget = TimeSpan.FromSeconds(5);
 

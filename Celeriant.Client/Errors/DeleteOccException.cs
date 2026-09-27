@@ -14,10 +14,20 @@ public class DeleteOccException : DeleteErrorException
     /// </summary>
     public long ExpectedVersion { get; }
 
+    public IReadOnlyList<AggregateConflict> Conflicts { get; } = Array.Empty<AggregateConflict>();
+
     /// <summary>
     /// The aggregate version the aggregate is actually at on the server.
     /// </summary>
     public long CurrentAggregateVersion { get; }
+
+    internal DeleteOccException(ErrorResponse error, IReadOnlyList<AggregateConflict> conflicts) : base(error)
+    {
+        Conflicts = conflicts;
+        if (conflicts.Count == 0) return;
+        ExpectedVersion = conflicts[0].Expected;
+        CurrentAggregateVersion = conflicts[0].Current;
+    }
 
     public DeleteOccException(ErrorResponse error) : base(error)
     {

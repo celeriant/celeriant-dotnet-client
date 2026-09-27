@@ -11,6 +11,13 @@ namespace Celeriant.Client.Requests;
 [MessagePackObject]
 public sealed class SingleAggregateWrite
 {
+    /// <summary>Require a version without appending events or advancing the aggregate.</summary>
+    public static SingleAggregateWrite Guard(long expectedVersion)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(expectedVersion);
+        return new SingleAggregateWrite { Events = [], ExpectedVersion = expectedVersion };
+    }
+
     /// <summary>The events to append, in order. Each needs a distinct increasing <c>ClientSeq</c>
     /// within this write (see <see cref="AggregateEvent"/>).</summary>
     [Key(0)]

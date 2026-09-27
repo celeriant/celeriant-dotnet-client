@@ -39,7 +39,7 @@ public sealed class WatchOptions
     /// OS-level TCP timeout waiting to rescue the caller. A node that accepts the connection and
     /// then says nothing parks <c>ConnectAsync</c> indefinitely. <see cref="CeleriantPool"/> fills
     /// this from its own connection timeout when unset, so only a direct
-    /// <see cref="WatchConnection.ConnectAsync"/> caller can leave it null.
+    /// <see cref="WatchConnection.ConnectAsync(string, Celeriant.Client.Requests.WatchRequest, WatchOptions, CancellationToken)"/> caller can leave it null.
     /// </para>
     /// </summary>
     public TimeSpan? ConnectionTimeout { get; init; }
@@ -49,7 +49,8 @@ public sealed class WatchOptions
 
     /// <summary>
     /// Maximum response payload size in bytes; bounds a single watch page. A page past the cap
-    /// throws <see cref="Errors.ProtocolException"/>. Null keeps the client default (64 MB).
+    /// throws <see cref="Errors.ProtocolException"/>. Null keeps the client default (64 MB). The
+    /// reply to Identify is read under <see cref="Celeriant.Transport.HandshakeLimits"/> instead.
     /// <see cref="CeleriantPool"/> fills both caps from its own options so a pool-dialled watch
     /// honours the same memory bound as every pooled request.
     /// </summary>

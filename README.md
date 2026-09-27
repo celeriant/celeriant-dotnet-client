@@ -18,6 +18,10 @@ For a deeper walkthrough: aggregate modelling, schemas, watch API, connection po
 dotnet add package Celeriant.Client
 ```
 
+## Compatibility
+
+Version 0.10 needs Celeriant server 0.3 or later and refuses to talk to older servers, so upgrade the server first. `Celeriant.Client` and `Celeriant.Transport` ship together at the same version; let `Celeriant.Client` pull in Transport rather than pinning it separately.
+
 ## Quick start
 
 ### 1. Start the server

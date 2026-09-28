@@ -67,7 +67,7 @@ public class LeaderRoutingContractTests
     public async Task ARefusedPrimary_ServesAgainOnceItsBreakerLapsesAndItIsBackOnItsPort()
     {
         var (primary, port) = LeaderRoutingFakes.DeadAddress();
-        await using var pool = new CeleriantPool(LeaderRoutingFakes.Options(primary));
+        await using var pool = new CeleriantPool(LeaderRoutingFakes.Options(primary, TimeSpan.FromSeconds(5)));
 
         await LeaderRoutingFakes.FailureAsync(
             () => pool.WriteAsync(LeaderRoutingFakes.NewWrite()),
@@ -293,12 +293,15 @@ internal static class LeaderRoutingFakes
     /// Short timeouts throughout: a routing bug must show up as a failed assertion inside the
     /// budget, never as a test run that stops producing output.
     /// </summary>
-    public static CeleriantPoolOptions Options(string address, params string[] seeds) => new()
+    public static CeleriantPoolOptions Options(string address, params string[] seeds)
+        => Options(address, TimeSpan.FromSeconds(1), seeds);
+
+    public static CeleriantPoolOptions Options(string address, TimeSpan connectionTimeout, params string[] seeds) => new()
     {
         Address = address,
         SeedAddresses = seeds.Length == 0 ? null : seeds,
         MaxConnections = 1,
-        ConnectionTimeout = TimeSpan.FromSeconds(1),
+        ConnectionTimeout = connectionTimeout,
         RequestTimeout = TimeSpan.FromSeconds(2),
     };
 
